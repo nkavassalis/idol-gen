@@ -62,6 +62,10 @@ knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusi
 - Empty alpha from BiRefNet → `no object found in the image`; the image likely has no single dominant object.
 - OOM is caught and reported with the specific levers to pull rather than a stack trace.
 - `serve()` blocks forever by design; tests must use `build_scene()` with the fake viser, never `serve()`.
+- The ground is a **floor**: its plane must be perpendicular to the up axis (`xz` for `+y`, `xy` for `+z` —
+  asking for `xy` with a y-up scene gives a vertical wall through the object) and it sits at the lowest point
+  of the visible objects, not at the origin, because Idol centres objects on the origin. `viewer.UP_INDEX` /
+  `GROUND_PLANE` / `floor_height` / `add_ground` are the only places that decide this; the app reuses them.
 - The app shows results by parsing the `.ply` back off disk, not from the in-memory `Gaussian` — deliberate, so
   the viewport provably matches the file. The in-memory object is z-up and the `.ply` is y-up; don't shortcut.
 - Real viser handles are needed to catch API drift (`add_upload_button`, `send_file_download`, `atomic`,

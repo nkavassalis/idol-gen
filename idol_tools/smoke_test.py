@@ -227,7 +227,8 @@ class FakeViser:
             self.log.append(('up', direction))
 
         def add_grid(self, name, **kwargs):
-            self.log.append(('grid', kwargs.get('plane')))
+            position = tuple(round(float(v), 4) for v in kwargs.get('position', (0, 0, 0)))
+            self.log.append(('grid', kwargs.get('plane'), position))
 
         def add_gaussian_splats(self, name, **kwargs):
             self.log.append(('splats', name, tuple(kwargs['centers'].shape), tuple(kwargs['covariances'].shape),
@@ -373,20 +374,37 @@ def test_viewer():
 
     handles = viewer.build_scene(RecordingServer(), [obj, dict(obj, name='other')], up='+y')
     check('up axis +y is set for the .ply files Idol writes', ('up', '+y') in recorded, str(recorded[:2]))
-    check('grid lies in the xy plane for y-up', ('grid', 'xy') in recorded)
+    grids = [e for e in recorded if e[0] == 'grid']
+    check('the ground is a floor (xz) for a y-up scene, not a wall through the object',
+          grids and grids[-1][1] == 'xz', str(grids[-1:]))
+    check('the floor sits under the object, not through its middle',
+          grids and grids[-1][2][1] < 0, str(grids[-1:]))
+    check('the ground can be hidden and moved',
+          ('checkbox', 'Ground grid') in recorded and ('slider', 'Ground height') in recorded,
+          str([e for e in recorded if e[0] in ('checkbox', 'slider')][-2:]))
     check('one splat node per object', sum(1 for e in recorded if e[0] == 'splats') == 2,
           str([e[1] for e in recorded if e[0] == 'splats']))
     check('handles returned for every object', set(handles) == {'thing', 'other'}, str(sorted(handles)))
     first = [e for e in recorded if e[0] == 'splats'][0]
     check('arrays have the shapes viser wants',
           first[2:] == ((10, 3), (10, 3, 3), (10, 3), (10, 1)), str(first[2:]))
-    check('a checkbox per object for toggling', sum(1 for e in recorded if e[0] == 'checkbox') == 2)
+    object_boxes = [e for e in recorded if e[0] == 'checkbox' and e[1] in ('thing', 'other')]
+    check('a checkbox per object for toggling', len(object_boxes) == 2, str([e[1] for e in object_boxes]))
     check('everything starts visible', all(h.visible for h in handles.values()))
 
     recorded.clear()
     handles2 = viewer.build_scene(RecordingServer(), [obj], up='+z')
-    check('--up z switches the axis and puts the grid in xz',
-          ('up', '+z') in recorded and ('grid', 'xz') in recorded, str(recorded[:2]))
+    check('a z-up scene gets an xy floor',
+          ('up', '+z') in recorded and [e for e in recorded if e[0] == 'grid'][-1][1] == 'xy',
+          str([e for e in recorded if e[0] == 'grid'][-1:]))
+
+    tall = dict(obj)
+    tall['centers'] = np.stack([np.zeros(10), np.linspace(-0.5, 0.5, 10), np.zeros(10)], axis=1).astype(np.float32)
+    recorded.clear()
+    viewer.build_scene(RecordingServer(), [tall], up='+y')
+    floor = [e for e in recorded if e[0] == 'grid'][-1]
+    check('the floor lands on the lowest point of a full-height object',
+          abs(floor[2][1] - (-0.502)) < 1e-3, f'grid at y={floor[2][1]} for an object spanning -0.5..+0.5')
     check('one object still works', list(handles2) == ['thing'])
 
     try:
@@ -524,7 +542,8 @@ def test_app():
                     'rescale_t', 'mode', 'crop_margin', 'seed', 'randomize', 'download', 'generate',
                     'progress', 'status', 'download_last'}
         check('every control the page needs exists', expected <= set(controls), str(sorted(expected - set(controls))))
-        check('the page is y-up with a ground grid', ('up', '+y') in server.log and ('grid', 'xy') in server.log)
+        check('the page is y-up with a ground grid',
+              ('up', '+y') in server.log and any(e[0] == 'grid' for e in server.log))
         check('preset dropdown offers the CLI presets',
               controls['preset'].props['options'] == list(PRESETS), str(controls['preset'].props['options']))
         check('density dropdown offers the rungs plus custom',
@@ -546,10 +565,14 @@ def test_app():
         check('flip sends the opposite up axis to the viewer',
               controls['up'].value == '-y' and ('up', '-y') in server.log, str(server.log[-4:]))
         check('and lays the ground grid in the plane matching that axis',
-              any(entry == ('grid', 'xy') for entry in server.log), str([e for e in server.log if e[0] == 'grid']))
+              [e for e in server.log if e[0] == 'grid'][-1][1] == 'xz',
+              str([e for e in server.log if e[0] == 'grid'][-1:]))
         controls['up'].fire('+z')
-        check('choosing +z moves the grid to xz',
-              any(entry == ('grid', 'xz') for entry in server.log), str([e for e in server.log if e[0] == 'grid']))
+        check('choosing +z turns the floor into xy',
+              [e for e in server.log if e[0] == 'grid'][-1][1] == 'xy',
+              str([e for e in server.log if e[0] == 'grid'][-1:]))
+        check('the ground can be hidden and dragged by hand',
+              ('checkbox', 'Ground grid') in server.log and ('slider', 'Ground height') in server.log)
         controls['up'].fire('+y')
 
         print('\n== web app: levers behave like the CLI')
@@ -618,6 +641,11 @@ def test_app():
         check('the page reports what it made',
               '128 Gaussians' in controls['status'].content and 'donut_s42' in controls['status'].content,
               controls['status'].content)
+        check('the floor was dropped onto the new object',
+              [e for e in server.log if e[0] == 'grid'][-1][2][1]
+              == round(float(state.objects['donut_s42']['mins'][1]) - 0.002, 4),
+              f"grid y={[e for e in server.log if e[0] == 'grid'][-1][2][1]}, "
+              f"object bottom y={float(state.objects['donut_s42']['mins'][1]):.3f}")
         check('the progress bar is hidden again', controls['progress'].visible is False)
         check('the lock is released', not state.lock.locked())
         check('no download unless asked', not any(e[0] == 'download' for e in server.log))

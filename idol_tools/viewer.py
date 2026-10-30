@@ -17,6 +17,42 @@ SH_C0 = 0.28209479177387814          # degree-0 spherical harmonic constant: rgb
 PLY_REQUIRED = ('x', 'y', 'z', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
                 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3')
 
+# Which coordinate the up axis points along, and the plane perpendicular to it. The ground is the floor, so
+# for a y-up scene it is xz — asking viser for 'xy' there gives a vertical wall through the middle of the
+# object, which is the usual reason a splat looks like it is being sliced in half.
+UP_INDEX = {'+x': 0, '-x': 0, '+y': 1, '-y': 1, '+z': 2, '-z': 2}
+GROUND_PLANE = {'+x': 'yz', '-x': 'yz', '+y': 'xz', '-y': 'xz', '+z': 'xy', '-z': 'xy'}
+
+
+def floor_height(objects, up='+y'):
+    """Where the floor belongs: the lowest point of anything on screen, along the up axis.
+
+    Idol centres objects on the origin, so a grid through 0 cuts them in half; the contact point is at the
+    bottom of the bounding box (about -0.5)."""
+    import numpy as np
+
+    axis = UP_INDEX.get(up, 1)
+    lows = []
+    for obj in objects:
+        mins = obj.get('mins')
+        if mins is None:
+            centers = obj.get('centers')
+            if centers is None or len(centers) == 0:
+                continue
+            mins = np.min(centers, axis=0)
+        lows.append(float(mins[axis]))
+    return min(lows) - 0.002 if lows else 0.0
+
+
+def add_ground(server, up='+y', height=None, objects=()):
+    """Add the ground grid as a floor under the objects. Returns the handle (re-add it to move the floor)."""
+    axis = UP_INDEX.get(up, 1)
+    position = [0.0, 0.0, 0.0]
+    position[axis] = floor_height(list(objects), up) if height is None else float(height)
+    return server.scene.add_grid('/ground', plane=GROUND_PLANE.get(up, 'xz'), position=tuple(position),
+                                 width=3.0, height=3.0, cell_size=0.1, cell_color=(70, 70, 70),
+                                 section_size=0.5, section_thickness=3)
+
 
 def sh_dc_to_rgb(features_dc):
     """[N, 3] degree-0 spherical harmonics -> [N, 3] sRGB in [0, 1]."""
@@ -115,9 +151,7 @@ def build_scene(server, objects, up='+y'):
 
     Split out from serve() so it can be tested without opening a port."""
     server.scene.set_up_direction(up)
-    server.scene.add_grid('/ground', plane='xy' if up in ('+y', '-y') else 'xz',
-                          width=2.0, height=2.0, cell_size=0.1, cell_color=(70, 70, 70),
-                          section_size=0.5, section_thickness=3)
+    ground = {'handle': add_ground(server, up=up, objects=objects)}
 
     handles, visible = {}, {}
     with server.gui.add_folder('Objects'):
@@ -128,6 +162,10 @@ def build_scene(server, objects, up='+y'):
             visible[obj['name']] = server.gui.add_checkbox(obj['name'], initial_value=True)
         scale_splats = server.gui.add_slider('Splat scale', min=0.1, max=3.0, step=0.05, initial_value=1.0)
         server.gui.add_markdown(f'{len(objects)} object(s), up axis **{up}**')
+    with server.gui.add_folder('Scene'):
+        show_ground = server.gui.add_checkbox('Ground grid', initial_value=True)
+        ground_height = server.gui.add_slider('Ground height', min=-1.5, max=1.5, step=0.01,
+                                              initial_value=floor_height(objects, up))
     with server.gui.add_folder('Details'):
         info = server.gui.add_markdown('')
 
@@ -140,8 +178,24 @@ def build_scene(server, objects, up='+y'):
         info.content = (f'Showing **{total:,}** Gaussians from '
                         f'**{sum(1 for name in handles if handles[name].visible)}** of {len(handles)} object(s)')
 
+    def move_ground(_=None):
+        """Re-add the grid: viser's grid plane is fixed at creation, and the floor follows the up axis."""
+        if ground['handle'] is not None:
+            try:
+                ground['handle'].remove()
+            except Exception:                                          # noqa: BLE001 - cosmetic only
+                pass
+        ground['handle'] = add_ground(server, up=up, height=float(ground_height.value))
+        ground['handle'].visible = bool(show_ground.value)
+
+    def toggle_ground(_=None):
+        if ground['handle'] is not None:
+            ground['handle'].visible = bool(show_ground.value)
+
     for checkbox in visible.values():
         checkbox.on_update(update)
+    show_ground.on_update(toggle_ground)
+    ground_height.on_update(move_ground)
 
     @scale_splats.on_update
     def _(_):

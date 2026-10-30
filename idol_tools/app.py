@@ -42,6 +42,8 @@ class AppState:
         self.objects = {}               # name -> {'path': str, 'handle': ..., 'checkbox': ..., 'count': int}
         self.last = None
         self.grid = None
+        self.ground_height = None       # None = drop the floor onto the lowest point of what is on screen
+        self.ground_visible = True
 
     def settings(self, controls):
         """Resolve the form into pipeline kwargs, mirroring idol-gen's preset/flag precedence.
@@ -83,8 +85,13 @@ def _density_map():
     return DENSITY
 
 
-def add_object(server, state, name, ply_path, visible_others=False):
+AUTO_GROUND = -2.0      # slider floor, used as the "sit it on the object" sentinel
+
+
+def add_object(server, state, name, ply_path, controls=None, visible_others=False):
     """Put a generated .ply into the scene (parsed from the file, so what you see is what you saved)."""
+    import numpy as np
+
     from idol_tools import viewer
 
     obj = viewer.load_ply(ply_path)
@@ -97,13 +104,16 @@ def add_object(server, state, name, ply_path, visible_others=False):
                                                   covariances=obj['covariances'], rgbs=obj['rgbs'],
                                                   opacities=obj['opacities'])
         checkbox = server.gui.add_checkbox(name, initial_value=True)
-        state.objects[name] = {'path': ply_path, 'handle': handle, 'checkbox': checkbox, 'count': obj['count']}
+        state.objects[name] = {'path': ply_path, 'handle': handle, 'checkbox': checkbox, 'count': obj['count'],
+                               'mins': np.min(obj['centers'], axis=0)}
 
         def toggle(_event, handle=handle, checkbox=checkbox):
             handle.visible = bool(checkbox.value)
 
         checkbox.on_update(toggle)
     state.last = name
+    if controls and 'ground_reposition' in controls:
+        controls['ground_reposition']()          # the floor follows whatever we just dropped in
     return obj
 
 
@@ -149,6 +159,11 @@ def build_ui(server, state):
     with server.gui.add_folder('View'):
         controls['up'] = server.gui.add_dropdown('Up axis', ['+y', '-y', '+z', '-z'], initial_value=state.up)
         controls['flip'] = server.gui.add_button('Flip upside down')
+        controls['ground'] = server.gui.add_checkbox('Ground grid', initial_value=True)
+        controls['ground_height'] = server.gui.add_slider('Ground height', min=AUTO_GROUND, max=1.5, step=0.01,
+                                                          initial_value=AUTO_GROUND,
+                                                          hint='the lowest slider value means: sit it on the '
+                                                               'bottom of the object')
 
     def on_upload(event):
         import numpy as np
@@ -196,13 +211,17 @@ def build_ui(server, state):
             with open(os.path.join(state.out_dir, f'{name}_camera.json'), 'w') as handle:
                 json.dump(output.camera, handle, indent=2)
             controls['preview'].image = np.asarray(output.preprocessed_image)
-            obj = add_object(server, state, name, ply)
+            obj = add_object(server, state, name, ply, controls)
             if controls['download'].value:
                 with open(ply, 'rb') as handle:
                     server.send_file_download(f'{name}.ply', handle.read())
             set_status(f'**{name}**: {obj["count"]:,} Gaussians in {time.time() - started:.1f}s -> `{ply}`')
         except Exception as error:                                    # noqa: BLE001 - report to the page, not the log
             set_status(f'`{type(error).__name__}` {error}')
+            if os.environ.get('IDOL_DEBUG'):
+                import traceback
+
+                traceback.print_exc()                                 # the page stays clean; the terminal can talk
         finally:
             controls['progress'].visible = False
             state.lock.release()
@@ -223,7 +242,9 @@ def build_ui(server, state):
             controls['gaussians'].value = _density_map()[rung]
 
     def set_up(axis):
-        """Tell viser which way is up, and lay the ground grid in the matching plane."""
+        """Tell viser which way is up, and lay the ground grid as a floor under the objects."""
+        from idol_tools import viewer
+
         state.up = axis
         server.scene.set_up_direction(axis)
         if state.grid is not None:
@@ -231,9 +252,23 @@ def build_ui(server, state):
                 state.grid.remove()
             except Exception:                                          # noqa: BLE001 - cosmetic only
                 pass
-        state.grid = server.scene.add_grid('/ground', plane='xy' if axis in ('+y', '-y') else 'xz',
-                                           width=2.0, height=2.0, cell_size=0.1, cell_color=(70, 70, 70),
-                                           section_size=0.5, section_thickness=3)
+        state.grid = viewer.add_ground(server, up=axis, height=state.ground_height,
+                                       objects=list(state.objects.values()))
+        if state.grid is not None:
+            state.grid.visible = bool(state.ground_visible)
+
+    def reposition_ground(_=None):
+        set_up(state.up)
+
+    def on_ground_toggle(event):
+        state.ground_visible = bool(event.target.value)
+        if state.grid is not None:
+            state.grid.visible = state.ground_visible
+
+    def on_ground_height(event):
+        value = float(event.target.value)
+        state.ground_height = None if abs(value - AUTO_GROUND) < 1e-9 else value
+        set_up(state.up)
 
     def on_up(event):
         set_up(event.target.value)
@@ -247,8 +282,11 @@ def build_ui(server, state):
     controls['download_last'].on_click(on_download_last)
     controls['up'].on_update(on_up)
     controls['flip'].on_click(on_flip)
+    controls['ground'].on_update(on_ground_toggle)
+    controls['ground_height'].on_update(on_ground_height)
     controls['preset'].on_update(on_preset)
     controls['density'].on_update(on_density)
+    controls['ground_reposition'] = reposition_ground
 
     set_up(state.up)
     return controls, set_status

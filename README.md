@@ -115,8 +115,10 @@ remains the way to batch a folder or script things; the app and the CLI share th
 validation code, so they cannot drift apart.
 
 The **View** panel has an **Up axis** dropdown (`+y` / `-y` / `+z` / `-z`) and a **Flip upside down** button,
-so an object that lands the wrong way round is one click to fix — no reload, and the ground grid follows the
-axis you pick.
+so an object that lands the wrong way round is one click to fix — no reload. The **Ground grid** checkbox and
+**Ground height** slider control the floor; by default it sits on the lowest point of whatever is on screen
+(the slider's bottom value means "auto"), so objects look like they are standing on something rather than
+being sliced through the middle by a grid.
 
 <details>
 <summary>Upstream also ships a Gradio demo</summary>
@@ -171,8 +173,9 @@ usual cause of nibbled silhouettes.
 ```
 
 Uses [viser](https://viser.studio): a local web server, rendering in your browser, **nothing uploaded**.
-Orbit with the drag, zoom with the scroll, toggle objects and splat scale in the side panel. Bind beyond
-localhost with `--host 0.0.0.0` if you are on a remote box.
+Orbit with the drag, zoom with the scroll, toggle objects and splat scale in the side panel. The ground grid
+is drawn as a floor under the objects (perpendicular to the up axis, at their lowest point), not through their
+middle. Bind beyond localhost with `--host 0.0.0.0` if you are on a remote box.
 
 No install at all: drag a `.ply` onto [gsplat.tech](https://gsplat.tech) or the
 [SuperSplat editor](https://superspl.at/editor) — both parse the file client-side.
