@@ -43,6 +43,7 @@ dev = ["viser>=0.2", "ruff>=0.6"]
 [project.scripts]
 idol-gen = "idol_tools.generate:main"
 idol-view = "idol_tools.viewer:main"
+idol-app = "idol_tools.app:main"
 idol-test = "idol_tools.smoke_test:main"
 
 [project.urls]

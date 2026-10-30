@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# idol-app: generate and view 3D Gaussian splats from the browser — upload, quality levers, download.
+#   ./idol-app                      http://localhost:7860
+#   ./idol-app --image photo.jpg --open
+# Run scripts/setup.sh first, or: pip install -e ".[view]"
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+venv="$here/.venv"
+if [ ! -x "$venv/bin/python" ]; then
+  echo "error: no .venv here — run scripts/setup.sh, or: pip install -e \".[view]\"" >&2
+  exit 1
+fi
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
+if [ -x "$venv/bin/idol-app" ]; then exec "$venv/bin/idol-app" "$@"; fi
+exec "$venv/bin/python" -m idol_tools.app "$@"

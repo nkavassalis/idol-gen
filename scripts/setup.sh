@@ -168,6 +168,7 @@ cat <<TXT
 
 Done. Next steps:
 
+  ./idol-app                                           generate and view in the browser, no terminal needed
   ./idol-gen --help                                    all the quality levers
   ./idol-gen path/to/image.jpg --mode real --preset draft
   ./idol-gen path/to/image.jpg --serve --open          generate, then view in the browser

@@ -1,15 +1,19 @@
 # idol — project notes
 
-Public CLI + viewer around the upstream `speridlabs/idol` image-to-3D SDK. Read `README.md` first.
+Public CLI + web app around the upstream `speridlabs/idol` image-to-3D SDK. Read `README.md` first.
 
 ## What lives where
 
 - `idol_tools/generate.py` — the `idol-gen` CLI: presets, `--density`, validation, batch, `--serve`.
 - `idol_tools/viewer.py` — the `idol-view` browser viewer (viser) and the `.ply` → arrays conversion
   (quaternion → covariance, SH-DC → RGB). `build_scene()` is split from `serve()` so it is testable.
+- `idol_tools/app.py` — the `idol-app` web UI: upload, quality levers, generate, view, download, all in one
+  viser page. It reuses `generate.PRESETS`/`DENSITY` (so CLI and app cannot drift) and displays results by
+  re-reading the `.ply` it just wrote. Generations are serialised on `AppState.lock`; errors go to the page.
 - `idol_tools/smoke_test.py` — the checks. `./idol-test`, `--eager`, or `--cli-only` (no GPU/weights; CI uses it).
-- `idol-gen`, `idol-view`, `idol-test` — bash launchers into `.venv` (prefer the installed console scripts,
-  fall back to `python -m idol_tools.<mod>`). Windows users take the console scripts / `-m` route.
+  `FakeViser` drives the viewer and the app without a browser; `FakePipeline` drives the app without weights.
+- `idol-gen`, `idol-view`, `idol-app`, `idol-test` — bash launchers into `.venv` (prefer the installed console
+  scripts, fall back to `python -m idol_tools.<mod>`). Windows users take the console scripts / `-m` route.
 - `scripts/setup.sh` — env setup + diagnostics: `--check`, `--rebuild`, `--no-weights`, `--cpu`, `SDK_TAG=`.
 - `idol-sdk/` — **upstream clone, read-only.** Never patch it to get something working; change `idol_tools/`,
   or pin with `SDK_TAG` and file the issue upstream.
@@ -54,3 +58,7 @@ knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusi
 - Empty alpha from BiRefNet → `no object found in the image`; the image likely has no single dominant object.
 - OOM is caught and reported with the specific levers to pull rather than a stack trace.
 - `serve()` blocks forever by design; tests must use `build_scene()` with the fake viser, never `serve()`.
+- The app shows results by parsing the `.ply` back off disk, not from the in-memory `Gaussian` — deliberate, so
+  the viewport provably matches the file. The in-memory object is z-up and the `.ply` is y-up; don't shortcut.
+- Real viser handles are needed to catch API drift (`add_upload_button`, `send_file_download`, `atomic`,
+  `sleep_forever`). `--no-model` boots the page without weights for exactly that kind of check.

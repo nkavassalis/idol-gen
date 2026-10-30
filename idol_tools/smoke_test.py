@@ -127,42 +127,92 @@ def test_pipeline(pipeline, example):
 
 # --------------------------------------------------------------------------- viewer sections
 
-class FakeViser:
-    """Records what serve() does, so the wiring is tested without a browser or a port."""
+_SENTINEL = object()
 
-    class _Node:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
 
-    class _Control:
-        def __init__(self, value):
+class FakeEvent:
+    """Stands in for viser's GuiEvent."""
+
+    def __init__(self, target):
+        self.target = target
+        self.client = None
+        self.client_id = None
+
+
+class FakeControl:
+    """A viser GUI handle: a value, the props it was created with, and callbacks you can fire()."""
+
+    def __init__(self, value=None, **props):
+        self.value = value
+        self.props = props
+        self.handlers = []
+
+    def on_update(self, func):
+        self.handlers.append(func)
+        return func
+
+    on_click = on_update
+    on_upload = on_update
+
+    def fire(self, value=_SENTINEL):
+        if value is not _SENTINEL:
             self.value = value
-            self.handlers = []
+        for handler in list(self.handlers):
+            handler(FakeEvent(self))
+        return self
 
-        def on_update(self, handler):
-            self.handlers.append(handler)
-            return handler
+
+class FakeNode:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class FakeViser:
+    """Records everything the app and viewer do, so wiring is tested without a browser or a port."""
 
     class _Gui:
         def __init__(self, log):
             self.log = log
+            self.controls = {}
 
         @contextlib.contextmanager
-        def add_folder(self, name):
-            self.log.append(('folder', name))
+        def add_folder(self, label, **kwargs):
+            self.log.append(('folder', label))
             yield
 
-        def add_checkbox(self, label, initial_value):
-            self.log.append(('checkbox', label))
-            return FakeViser._Control(initial_value)
+        def _add(self, kind, label, value, **props):
+            self.log.append((kind, label))
+            control = FakeControl(value=value, **props)
+            if label:
+                self.controls[label] = control
+            return control
 
-        def add_slider(self, label, **kwargs):
-            self.log.append(('slider', label))
-            return FakeViser._Control(kwargs.get('initial_value', 1.0))
+        def add_button(self, label, **kwargs):
+            return self._add('button', label, None, **kwargs)
 
-        def add_markdown(self, content):
-            self.log.append(('markdown',))
-            return FakeViser._Node(content=content)
+        def add_upload_button(self, label, **kwargs):
+            return self._add('upload', label, None, **kwargs)
+
+        def add_checkbox(self, label, initial_value, **kwargs):
+            return self._add('checkbox', label, initial_value, **kwargs)
+
+        def add_number(self, label, initial_value, **kwargs):
+            return self._add('number', label, initial_value, **kwargs)
+
+        def add_slider(self, label, min, max, step, initial_value, **kwargs):
+            return self._add('slider', label, initial_value, min=min, max=max, step=step, **kwargs)
+
+        def add_dropdown(self, label, options, initial_value=None, **kwargs):
+            return self._add('dropdown', label, initial_value, options=list(options), **kwargs)
+
+        def add_progress_bar(self, value, **kwargs):
+            return self._add('progress', None, value, **kwargs)
+
+        def add_image(self, image, **kwargs):
+            return self._add('image', kwargs.pop('label', None), image, **kwargs)
+
+        def add_markdown(self, content, **kwargs):
+            return self._add('markdown', None, content, **kwargs)
 
     class _Scene:
         def __init__(self, log):
@@ -177,13 +227,20 @@ class FakeViser:
         def add_gaussian_splats(self, name, **kwargs):
             self.log.append(('splats', name, tuple(kwargs['centers'].shape), tuple(kwargs['covariances'].shape),
                              tuple(kwargs['rgbs'].shape), tuple(kwargs['opacities'].shape)))
-            return FakeViser._Node(visible=kwargs.get('visible', True), scale=1.0)
+            return FakeNode(visible=kwargs.get('visible', True), scale=1.0)
 
     class ViserServer:
         def __init__(self, *args, **kwargs):
             self.log = []
             self.gui = FakeViser._Gui(self.log)
             self.scene = FakeViser._Scene(self.log)
+
+        @contextlib.contextmanager
+        def atomic(self):
+            yield
+
+        def send_file_download(self, filename, content, **kwargs):
+            self.log.append(('download', filename, len(content)))
 
         def stop(self):
             self.log.append(('stop',))
@@ -332,6 +389,177 @@ def test_viewer():
         check('serving with nothing to view is refused', False, 'no error raised')
     except SystemExit as error:
         check('serving with nothing to view is refused', 'nothing to view' in str(error), str(error))
+
+
+# --------------------------------------------------------------------------- web app section
+
+def test_app():
+    import types
+
+    import numpy as np
+    from idol.gaussian import Gaussian
+    from PIL import Image
+
+    from idol_tools import app as app_module
+    from idol_tools.generate import DENSITY, PRESETS
+
+    print('\n== web app: the page and its controls')
+    generator = torch.Generator().manual_seed(5)
+    synthetic = Gaussian(raw_xyz=torch.rand(128, 3, generator=generator) - 0.5,
+                         features_dc=torch.randn(128, 1, 3, generator=generator) * 0.4,
+                         raw_scaling=torch.randn(128, 3, generator=generator) - 3,
+                         raw_rotation=torch.randn(128, 4, generator=generator),
+                         raw_opacity=torch.randn(128, 1, generator=generator),
+                         scaling_bias=0.004, opacity_bias=0.1, minimum_kernel_size=0.0009)
+
+    calls = []
+
+    class FakeOutput:
+        def __init__(self):
+            self.gaussian = synthetic
+            self.preprocessed_image = Image.new('RGB', (16, 16), (9, 9, 9))
+            self.camera = {'yaw': 0.1, 'pitch': 0.2, 'radius': 1.0, 'fov': 40.0}
+
+    class FakePipeline:
+        def __init__(self, error=None):
+            self.error = error
+
+        def __call__(self, image, **kwargs):
+            calls.append(kwargs)
+            if self.error:
+                raise self.error
+            return FakeOutput()
+
+    with tempfile.TemporaryDirectory() as out:
+        server = FakeViser.ViserServer()
+        state = app_module.AppState(FakePipeline(), out)
+        controls, set_status = app_module.build_ui(server, state)
+
+        expected = {'upload', 'preview', 'source', 'preset', 'density', 'gaussians', 'steps', 'cfg_strength',
+                    'rescale_t', 'mode', 'crop_margin', 'seed', 'randomize', 'download', 'generate',
+                    'progress', 'status', 'download_last'}
+        check('every control the page needs exists', expected <= set(controls), str(sorted(expected - set(controls))))
+        check('the page is y-up with a ground grid', ('up', '+y') in server.log and ('grid', 'xy') in server.log)
+        check('preset dropdown offers the CLI presets',
+              controls['preset'].props['options'] == list(PRESETS), str(controls['preset'].props['options']))
+        check('density dropdown offers the rungs plus custom',
+              controls['density'].props['options'] == list(DENSITY) + ['custom'],
+              str(controls['density'].props['options']))
+        check('Gaussians is bounded to the valid range in steps of 32',
+              (controls['gaussians'].props['min'], controls['gaussians'].props['max'],
+               controls['gaussians'].props['step']) == (32_768, 1_048_576, 32))
+        check('steps is bounded to something sane',
+              (controls['steps'].props['min'], controls['steps'].props['max']) == (1, 200))
+        check('mode matches the CLI', controls['mode'].props['options'] == ['synthetic', 'real'])
+
+        print('\n== web app: levers behave like the CLI')
+        controls['preset'].fire('draft')
+        check('picking a preset pushes its values into the levers',
+              controls['steps'].value == PRESETS['draft']['steps']
+              and controls['gaussians'].value == PRESETS['draft']['num_gaussians']
+              and controls['density'].value == '64k',
+              f"steps={controls['steps'].value} gaussians={controls['gaussians'].value}")
+        controls['density'].fire('1m')
+        check('choosing a density sets the exact count', controls['gaussians'].value == 1_048_576,
+              f"{controls['gaussians'].value:,}")
+        settings = state.settings(controls)
+        check('settings() resolves a density rung', settings['num_gaussians'] == 1_048_576,
+              f"{settings['num_gaussians']:,}")
+        controls['density'].fire('custom')
+        controls['gaussians'].value = 100_000
+        check('custom density uses the typed count',
+              state.settings(controls)['num_gaussians'] == 100_000, str(state.settings(controls)['num_gaussians']))
+        controls['crop_margin'].value = 0.0
+        check('crop margin 0 means "from mode"', state.settings(controls)['crop_margin'] is None)
+        controls['crop_margin'].value = 1.5
+        controls['mode'].fire('real')
+        settings = state.settings(controls)
+        check('crop margin and mode pass through',
+              settings['crop_margin'] == 1.5 and settings['mode'] == 'real', str(settings))
+
+        print('\n== web app: upload')
+        image = Image.new('RGB', (24, 16), (200, 30, 30))
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        controls['upload'].fire(types.SimpleNamespace(name='donut.png', content=buffer.getvalue()))
+        preview_shape = np.asarray(controls['preview'].image).shape[:2]
+        check('an upload is remembered and previewed',
+              state.uploaded is not None and state.uploaded[0] == 'donut' and preview_shape == (16, 24),
+              str(state.uploaded and state.uploaded[0]))
+        check('the page says it is ready', 'Ready' in controls['status'].content, controls['status'].content)
+        controls['upload'].fire(types.SimpleNamespace(name='broken.png', content=b'not an image'))
+        check('an unparsable upload is reported on the page', 'Could not read' in controls['status'].content,
+              controls['status'].content)
+        controls['upload'].fire(types.SimpleNamespace(name='donut.png', content=buffer.getvalue()))
+
+        print('\n== web app: generate')
+        empty = FakeViser.ViserServer()
+        empty_state = app_module.AppState(FakePipeline(), out)
+        empty_controls, _ = app_module.build_ui(empty, empty_state)
+        empty_controls['generate'].fire()
+        check('generate without an upload asks for one instead of crashing',
+              'Upload an image first' in empty_controls['status'].content, empty_controls['status'].content)
+        check('and the model was never called', not calls, str(calls))
+
+        controls['preset'].fire('standard')
+        controls['density'].fire('32k')
+        controls['randomize'].value = False
+        controls['generate'].fire()
+        ply = os.path.join(out, 'donut_s42.ply')
+        check('the .ply, preview and camera are written to disk',
+              os.path.exists(ply) and os.path.exists(os.path.join(out, 'donut_s42_input.png'))
+              and os.path.exists(os.path.join(out, 'donut_s42_camera.json')))
+        check('the pipeline got the resolved settings',
+              calls and calls[-1]['num_gaussians'] == 32_768 and calls[-1]['steps'] == PRESETS['standard']['steps']
+              and calls[-1]['seed'] == 42 and calls[-1]['verbose'] is False, str(calls[-1]))
+        check('the new object lands in the scene',
+              any(entry[0] == 'splats' and entry[1].endswith('/donut_s42') for entry in server.log),
+              str([e[1] for e in server.log if e[0] == 'splats'][-2:]))
+        check('the page reports what it made',
+              '128 Gaussians' in controls['status'].content and 'donut_s42' in controls['status'].content,
+              controls['status'].content)
+        check('the progress bar is hidden again', controls['progress'].visible is False)
+        check('the lock is released', not state.lock.locked())
+        check('no download unless asked', not any(e[0] == 'download' for e in server.log))
+
+        controls['download'].value = True
+        controls['randomize'].value = True
+        controls['generate'].fire()
+        check('the .ply is offered as a browser download',
+              any(e[0] == 'download' and e[1].endswith('.ply') and e[2] > 1000 for e in server.log),
+              str([e for e in server.log if e[0] == 'download'][-1:]))
+        check('randomize picks a new seed', calls[-1]['seed'] != 42 and controls['seed'].value == calls[-1]['seed'],
+              str(calls[-1]['seed']))
+        check('older objects are hidden so results do not overlap',
+              sum(1 for obj in state.objects.values() if obj['checkbox'].value) == 1,
+              str({name: bool(obj['checkbox'].value) for name, obj in state.objects.items()}))
+
+        print('\n== web app: failure handling')
+        busy_state = app_module.AppState(FakePipeline(), out)
+        busy_controls, _ = app_module.build_ui(FakeViser.ViserServer(), busy_state)
+        busy_controls['upload'].fire(types.SimpleNamespace(name='x.png', content=buffer.getvalue()))
+        busy_state.lock.acquire()
+        busy_controls['generate'].fire()
+        busy_state.lock.release()
+        check('a second generation while busy is refused politely',
+              'Already generating' in busy_controls['status'].content, busy_controls['status'].content)
+
+        boom = app_module.AppState(FakePipeline(RuntimeError('CUDA out of memory')), out)
+        boom_controls, _ = app_module.build_ui(FakeViser.ViserServer(), boom)
+        boom_controls['upload'].fire(types.SimpleNamespace(name='x.png', content=buffer.getvalue()))
+        boom_controls['generate'].fire()
+        check('a model failure is shown on the page, not a stack trace',
+              'RuntimeError' in boom_controls['status'].content
+              and 'out of memory' in boom_controls['status'].content
+              and 'Traceback' not in boom_controls['status'].content, boom_controls['status'].content)
+        check('the page recovers: the lock is free and progress is hidden',
+              not boom.lock.locked() and boom_controls['progress'].visible is False)
+
+        idle = app_module.AppState(FakePipeline(), out)
+        idle_controls, _ = app_module.build_ui(FakeViser.ViserServer(), idle)
+        idle_controls['download_last'].fire()
+        check('downloading before generating is handled', 'Nothing to download' in idle_controls['status'].content,
+              idle_controls['status'].content)
 
 
 # --------------------------------------------------------------------------- CLI sections
@@ -501,6 +729,7 @@ def main():
             print(f'  (created a placeholder example at {EXAMPLE})')
         test_cli(example)
         test_viewer()
+        test_app()
     else:
         import idol.pipeline as pipeline_module
         from idol.pipeline import IdolPipeline
@@ -524,6 +753,7 @@ def main():
         test_pipeline(pipeline, example)
         test_cli(example)
         test_viewer()
+        test_app()
 
     print('\n' + ('ALL CHECKS PASSED' if not FAILURES else f'{len(FAILURES)} FAILED: {FAILURES}'))
     return 1 if FAILURES else 0

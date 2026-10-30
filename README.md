@@ -11,12 +11,13 @@ showed. ~7 GB VRAM, seconds per object on a consumer card.
 ```bash
 ./idol-gen photo.jpg --mode real --preset high      # -> outputs/photo.ply
 ./idol-view outputs/                                # orbit it in the browser
+./idol-app                                          # or skip the terminal: upload, generate, view in one page
 ```
 
-**What this repo adds** on top of the (excellent) upstream SDK: presets and a readable density ladder,
-argument validation that fails before you burn a minute of GPU time, batch folders with resume, seed
-variants, a local browser viewer, a setup script that tells you exactly what is missing, and a test suite
-that runs without Hugging Face access.
+**What this repo adds** on top of the (excellent) upstream SDK: a **browser app** that does the whole thing
+without a command line, presets and a readable density ladder, argument validation that fails before you burn
+a minute of GPU time, batch folders with resume, seed variants, a local viewer, a setup script that tells you
+exactly what is missing, and a test suite that runs without Hugging Face access.
 
 **What it is not:** the model, the training code, or an affiliation with Sperl Labs. The model is theirs —
 please cite their [project page](https://speridlabs.com/research/idol).
@@ -24,7 +25,7 @@ please cite their [project page](https://speridlabs.com/research/idol).
 ## Contents
 
 - [Requirements](#requirements) · [Install](#install) · [Quickstart](#quickstart)
-- [Quality levers](#quality-levers) · [Viewing](#viewing) · [Batch](#batch)
+- [Web app](#web-app) · [Quality levers](#quality-levers) · [Viewing](#viewing) · [Batch](#batch)
 - [How it works](#how-it-works) · [Tests](#tests) · [Troubleshooting](#troubleshooting) · [License](#license)
 
 ## Requirements
@@ -92,6 +93,34 @@ Every image writes:
 
 `<name>_input.png` is the fastest way to diagnose a bad result — if the object is badly framed or bitten into
 there, no sampling setting will save it.
+
+## Web app
+
+If you would rather not touch a terminal at all:
+
+```bash
+./idol-app                      # http://localhost:7860
+./idol-app --image photo.jpg --open
+./idol-app --port 8080 --out shots/ --host 0.0.0.0     # e.g. on a headless box you reach over the network
+```
+
+One page: drop in a picture, pick a preset or pull the same levers the CLI exposes (density, steps, CFG,
+time shift, mode, crop margin, seed), press **Generate**, and the splat appears in the 3D viewport beside the
+exact 1024² image the model saw. Results are written to `outputs/web/` as `.ply` + `_input.png` +
+`_camera.json`, and a **Download** button hands you the `.ply` in the browser.
+
+Still fully local — the browser does the rendering and the only network traffic is downloading weights.
+`--host 0.0.0.0` lets others on your network generate on your GPU, which the app will remind you of. The CLI
+remains the way to batch a folder or script things; the app and the CLI share the same preset, density and
+validation code, so they cannot drift apart.
+
+<details>
+<summary>Upstream also ships a Gradio demo</summary>
+
+`idol-sdk/demo/app.py` is Sperl Labs' own Gradio page (with an example gallery). It works, but it is a second
+UI with its own pinned Gradio version and its own copy of the settings, so this repo's `idol-app` reuses our
+presets, validation and viewer instead. Use whichever you prefer.
+</details>
 
 ## Quality levers
 
@@ -163,6 +192,12 @@ Gaussians, written out as a standard 3DGS `.ply` (rotated z-up → y-up for view
 (`0.5 + SH_C0·f_dc`) and opacities, and hands them to viser. The conversions are unit-tested against the
 SDK's own `Gaussian` object, so a silent axis or quaternion mistake would fail the build.
 
+`idol_tools/app.py` is the browser front end: a viser server whose side panel holds the upload button and the
+levers, and whose scene holds the results. It calls the same `IdolPipeline` as the CLI and displays results by
+re-reading the `.ply` it just wrote — so what you see on screen is provably what landed on disk. Generations
+are serialised behind a lock (one GPU, one job at a time) and failures are reported in the page rather than
+the console.
+
 ## Tests
 
 ```bash
@@ -174,7 +209,8 @@ SDK's own `Gaussian` object, so a silent axis or quaternion mistake would fail t
 The full test loads the **real** Idol weights and only stubs the two gated encoders (random tokens of the
 right shape), so it runs offline. It checks Gaussian counts, finiteness, standard 3DGS PLY attributes, seed
 determinism vs. seed sensitivity, crop behaviour per mode, the quaternion/covariance maths, the `.ply`
-round trip including the z-up → y-up convention, and every CLI flag's precedence. See
+round trip including the z-up → y-up convention, every CLI flag's precedence, and the web app's controls,
+lever resolution, upload, generation, download and error handling against a fake viser server. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Troubleshooting
@@ -189,6 +225,7 @@ round trip including the z-up → y-up convention, and every CLI flag's preceden
 | `CUDA out of memory` | The CLI prints the levers: fewer `--num_gaussians`, `--dinov3_dtype bf16`, `--preset draft`. |
 | First image is slow | `torch.compile`. Subsequent images in the process are the real speed. |
 | `Failed to import diffusers... peft` | A user-site package is shadowing the venv. Keep `PYTHONNOUSERSITE=1` (the launchers set it) and re-run `scripts/setup.sh --rebuild`. |
+| `idol-app` page opens but Generate does nothing | Look at the terminal running it — usually the gated encoders (`scripts/setup.sh --check`). The page itself reports model errors inline. |
 | Result looks like it's lying on its back | Up-axis mismatch in *your* viewer, not the file: Idol writes y-up like other 3DGS tools. `./idol-view x.ply --up z` for SDK-native files. |
 
 ## Privacy and licensing

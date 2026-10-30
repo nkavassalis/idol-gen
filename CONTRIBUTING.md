@@ -19,7 +19,8 @@ Both test modes must pass. If you add a flag or change behaviour, add a check fo
 ```
 idol_tools/generate.py    the idol-gen CLI: presets, validation, batch, --serve
 idol_tools/viewer.py      the idol-view browser viewer (viser) and the .ply -> arrays conversion
-idol_tools/smoke_test.py  the checks
+idol_tools/app.py         the idol-app web UI: upload, levers, generate, view, download (viser)
+idol_tools/smoke_test.py  the checks (FakeViser drives the app and viewer without a browser)
 scripts/setup.sh          environment setup and diagnostics
 idol-sdk/                 upstream clone — treat as read-only
 docs/                     archived model card, notes
@@ -34,7 +35,10 @@ docs/                     archived model card, notes
   `require_encoder_access` — that check is the licence boundary.
 - **Keep `.venv` isolated.** No `--system-site-packages`; the launchers keep `PYTHONNOUSERSITE=1`. A stale
   user-site `peft` shadowing the venv breaks `diffusers` and is miserable to debug.
-- **New flag → new check, and document it** in `README.md` (the levers table) and in `--help`.
+- **New flag → new check, and document it** in `README.md` (the levers table) and in `--help` — and if it is a
+  quality lever, mirror it in the `idol-app` panel, which is meant to cover everything the CLI can do.
+- The app serialises generations on `AppState.lock` and reports failures into the page, never as a stack
+  trace. Keep it that way: nothing raised inside a viser callback should escape to the console.
 - **Numbers need sources.** Timings and VRAM claims belong in `docs/` with the GPU and settings that produced
   them, not in the README as vibes.
 
