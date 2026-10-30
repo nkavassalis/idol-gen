@@ -24,7 +24,9 @@ FAILURES = []
 
 
 def check(name, condition, detail=''):
-    print(f'  {"PASS" if condition else "FAIL"}  {name}{": " + detail if detail else ""}')
+    # Windows CI runs on a cp1252 console: never let an un-encodable character in a detail string crash the run.
+    print(f'  {"PASS" if condition else "FAIL"}  {name}{": " + detail if detail else ""}'.encode(
+        sys.stdout.encoding or 'utf-8', 'replace').decode(sys.stdout.encoding or 'utf-8', 'replace'))
     if not condition:
         FAILURES.append(name)
 

@@ -189,7 +189,7 @@ def build_ui(server, state):
             if controls['download'].value:
                 with open(ply, 'rb') as handle:
                     server.send_file_download(f'{name}.ply', handle.read())
-            set_status(f'**{name}**: {obj["count"]:,} Gaussians in {time.time() - started:.1f}s → `{ply}`')
+            set_status(f'**{name}**: {obj["count"]:,} Gaussians in {time.time() - started:.1f}s -> `{ply}`')
         except Exception as error:                                    # noqa: BLE001 - report to the page, not the log
             set_status(f'`{type(error).__name__}` {error}')
         finally:
