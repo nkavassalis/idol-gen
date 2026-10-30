@@ -9,7 +9,7 @@ description = "One image to a 3D Gaussian splat: a friendly CLI and browser view
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "nick", url = "https://github.com/nick" }]
+authors = [{ name = "Nick Kavassalis", email = "nick@kavassalis.com", url = "https://github.com/nkavassalis" }]
 keywords = ["3d", "gaussian-splatting", "image-to-3d", "3dgs", "cli", "vision"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -47,7 +47,7 @@ idol-app = "idol_tools.app:main"
 idol-test = "idol_tools.smoke_test:main"
 
 [project.urls]
-Homepage = "https://github.com/nick/idol"
+Homepage = "https://github.com/nkavassalis/idol-gen"
 Upstream = "https://github.com/speridlabs/idol-sdk"
 Model = "https://huggingface.co/speridlabs/idol"
 

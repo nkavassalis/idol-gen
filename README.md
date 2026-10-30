@@ -38,7 +38,7 @@ please cite their [project page](https://speridlabs.com/research/idol).
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USER/idol-gen.git && cd idol-gen
+git clone https://github.com/nkavassalis/idol-gen.git && cd idol-gen
 scripts/setup.sh
 ```
 
