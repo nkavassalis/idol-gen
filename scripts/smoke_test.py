@@ -156,13 +156,42 @@ def main():
     check('preset leaves mode/crop defaults', ns.mode == 'synthetic' and ns.crop_margin is None)
     ns = resolve(parser.parse_args([EXAMPLE, '--preset', 'max', '--gaussians', '65536']), parser)
     check('--gaussians alias works', ns.num_gaussians == 65_536, f'{ns.num_gaussians:,}')
-    for bad in ('33000', '100', '2000000'):
+
+    ns = resolve(parser.parse_args([EXAMPLE, '--density', '256k']), parser)
+    check('--density 256k = 262,144', ns.num_gaussians == 262_144, f'{ns.num_gaussians:,}')
+    ns = resolve(parser.parse_args([EXAMPLE, '--preset', 'max', '--density', '32k']), parser)
+    check('--density beats the preset', ns.num_gaussians == 32_768 and ns.steps == PRESETS['max']['steps'],
+          f'{ns.num_gaussians:,} gaussians at {ns.steps} steps')
+    ns = resolve(parser.parse_args([EXAMPLE, '--preset', 'draft', '--density', '1m']), parser)
+    check('--density 1m = 1,048,576, preset steps kept',
+          ns.num_gaussians == 1_048_576 and ns.steps == PRESETS['draft']['steps'],
+          f'{ns.num_gaussians:,} at {ns.steps} steps')
+    check('--density is recorded as an override', 'density=1m' in ns.overridden, str(ns.overridden))
+    for text, want in (('1m', 1_048_576), ('1M', 1_048_576), ('256k', 262_144), ('0.5m', 524_288),
+                       ('262,144', 262_144), ('32_768', 32_768),
+                       ('48k', 49_152)):  # free-form shorthand is allowed, unlike --density's fixed rungs
+        ns = resolve(parser.parse_args([EXAMPLE, '--gaussians', text]), parser)
+        check(f'--gaussians {text} parses', ns.num_gaussians == want, f'{ns.num_gaussians:,}')
+    for bad in ('33000', '100', '2000000', 'banana', '48.251k', '1m1m', ''):
         try:
             with contextlib.redirect_stderr(io.StringIO()):
                 parser.parse_args([EXAMPLE, '--num_gaussians', bad])
-            check(f'rejects --num_gaussians {bad}', False, 'accepted an invalid value')
+            check(f'rejects --num_gaussians {bad!r}', False, 'accepted an invalid value')
         except SystemExit:
-            check(f'rejects --num_gaussians {bad}', True)
+            check(f'rejects --num_gaussians {bad!r}', True)
+    for bad in ('48k', '2m', '256000'):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                parser.parse_args([EXAMPLE, '--density', bad])
+            check(f'rejects --density {bad!r}', False, 'accepted an invalid rung')
+        except SystemExit:
+            check(f'rejects --density {bad!r}', True)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            parser.parse_args([EXAMPLE, '--density', '256k', '--num_gaussians', '65536'])
+        check('rejects --density together with --num_gaussians', False, 'accepted both')
+    except SystemExit:
+        check('rejects --density together with --num_gaussians', True)
 
     print('\n== batch handling')
     from generate import collect_images

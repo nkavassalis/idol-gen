@@ -29,7 +29,9 @@ Local wrapper around the upstream `speridlabs/idol` image-to-3D SDK. Read `READM
 
 `--num_gaussians` (density) › `--steps` (detail, linear cost) › `--cfg_strength` (fidelity to the input) ›
 `--rescale_t` (shape vs detail in the schedule) › `--mode`/`--crop_margin` (framing — often the real cause of
-a bad result). Presets bundle the first four; explicit flags override presets.
+a bad result). Presets bundle the first four; explicit flags override presets. To change density alone use
+`--density {32k,64k,128k,256k,512k,1m}` (fixed rungs, beats the preset); `--num_gaussians` is the exact
+knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusive.
 
 ## Gotchas
 

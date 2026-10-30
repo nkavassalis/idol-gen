@@ -41,6 +41,8 @@ If access is missing, Idol stops **before** downloading anything and prints whic
 ./idol-gen render.png                                 # render / AI image (default --mode synthetic)
 ./idol-gen render.png --preset draft                  # 20 steps, 65k Gaussians — iterate on framing/seed
 ./idol-gen render.png --preset max                    # 100 steps, 1,048,576 Gaussians
+./idol-gen render.png --density 32k                   # density only, preset steps unchanged
+./idol-gen render.png --preset draft --density 1m     # quick sampling, full density
 ./idol-gen render.png --steps 80 --gaussians 524288 --cfg 2.0
 ./idol-gen renders/ --out out/ --skip-existing        # whole folder, resumable
 ./idol-gen render.png --variants 3 --seed 100         # seeds 100,101,102 to pick the best
@@ -50,12 +52,20 @@ Each image writes `<name>.ply` (open in any splat viewer — [gsplat viewer](htt
 SuperSplat), plus `<name>_input.png` (the 1024² image the model actually saw) and `<name>_camera.json`
 (predicted yaw/pitch/radius/fov of the input).
 
+**Input formats:** anything PIL opens — `.png .jpg .jpeg .webp .bmp .tif .tiff`. What matters is not the
+container but whether the file carries real alpha: a transparent PNG/WebP cutout is trusted as-is and
+**skips BiRefNet entirely**, while JPEG/BMP/opaque-PNG/TIFF get matted by BiRefNet. So a clean hand-made
+cutout is often the best input; with JPEGs keep the background distinct from the object and quality ≥ 90,
+since compression ringing on high-contrast edges is the usual source of nibbled silhouettes. Always glance
+at `<name>_input.png` — matting mistakes are visible there before you spend 100 steps on them.
+
 ## Quality levers
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--preset` | `standard` | Bundle of the four levers below: `draft` 20/65k, `standard` 50/262k, `high` 75/524k, `max` 100/1,048,576. Explicit flags override it. |
-| `--num_gaussians` | preset | Splat density. 32,768 → 1,048,576, must be a multiple of 32 (rejected early with the nearest valid value). Biggest knob for detail-vs-size. |
+| `--density` | from preset | **The easy density switch**, independent of the preset: `32k` `64k` `128k` `256k` `512k` `1m` (= 32,768 → 1,048,576). Use it to change density alone, e.g. `--preset draft --density 1m` for fast steps at full density. |
+| `--num_gaussians` | preset | Exact count: 32,768 → 1,048,576, must be a multiple of 32 (rejected early with the nearest valid value). Also takes shorthand — `256k`, `1m`, `0.5m`, `262,144` — and is mutually exclusive with `--density`. Biggest knob for detail-vs-size. |
 | `--steps` | preset | Euler steps on the flow. Cost is linear; below ~25 detail starts to smear. |
 | `--cfg_strength` | 3.0 | Classifier-free guidance. Higher hugs the input image harder (and can over-sharpen/artifact); `0` is unconditional. |
 | `--rescale_t` | 3.0 | Time shift. >1 spends more steps on overall shape, <1 on fine detail. |

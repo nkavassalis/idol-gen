@@ -6,11 +6,14 @@ Examples
   ./idol-gen render.png --preset draft              # quick preview (20 steps, 65k)
   ./idol-gen render.png --preset max                # 100 steps, 1,048,576 Gaussians
   ./idol-gen render.png --steps 80 --num_gaussians 524288 --cfg_strength 2.0
+  ./idol-gen render.png --preset draft --density 1m   # quick steps, full density
+  ./idol-gen render.png --density 32k                 # density alone: 32,768 Gaussians
   ./idol-gen renders/ --out out/ --skip-existing    # a whole folder
   ./idol-gen render.png --variants 3                # seeds 42,43,44 side by side
 
 Quality levers, roughly in order of impact:
-  --num_gaussians  density of the splat (32,768 .. 1,048,576, multiple of 32)
+  --num_gaussians  density of the splat (32,768 .. 1,048,576, multiple of 32); --density 32k|64k|128k|256k|512k|1m
+                   is the same knob with readable rungs
   --steps          denoising steps; more recover detail, cost is linear
   --cfg_strength   how strictly the object follows the input image (0 = unconditional)
   --rescale_t      noise-schedule shift: higher spends more steps on shape, lower on detail
@@ -46,6 +49,11 @@ PRESETS = {
 }
 MIN_GAUSSIANS, MAX_GAUSSIANS, GAUSSIAN_MULTIPLE = 32_768, 1_048_576, 32
 
+# The density ladder: every rung is a power of two, a valid anchor count, and readable at a glance.
+# k = 1024, m = 1024^2, so 256k = 262,144 and 1m = 1,048,576 (the model's own rungs, not decimal thousands).
+DENSITY = {'32k': 32_768, '64k': 65_536, '128k': 131_072, '256k': 262_144, '512k': 524_288, '1m': 1_048_576}
+UNIT = {'k': 1024, 'm': 1024 * 1024, '': 1}
+
 
 def positive_int(value):
     ivalue = int(value)
@@ -55,10 +63,21 @@ def positive_int(value):
 
 
 def gaussians(value):
-    ivalue = int(value)
+    """Accepts 262144, 256k, 256K, 1m, 0.5m — anything of the form <number>[k|m]."""
+    text = str(value).strip().lower().replace('_', '').replace(',', '')
+    if text.endswith(('k', 'm')):
+        unit, number = text[-1], text[:-1]
+    else:
+        unit, number = '', text
+    try:
+        ivalue = int(round(float(number) * UNIT[unit]))
+    except (ValueError, KeyError):
+        raise argparse.ArgumentTypeError(
+            f'cannot read {value!r}; use a number like 262144, or a rung like 32k, 256k, 1m '
+            f'({", ".join(DENSITY)})')
     if not MIN_GAUSSIANS <= ivalue <= MAX_GAUSSIANS:
         raise argparse.ArgumentTypeError(
-            f'--num_gaussians must be between {MIN_GAUSSIANS:,} and {MAX_GAUSSIANS:,}, got {ivalue:,}')
+            f'--num_gaussians must be between {MIN_GAUSSIANS:,} (32k) and {MAX_GAUSSIANS:,} (1m), got {ivalue:,}')
     if ivalue % GAUSSIAN_MULTIPLE:
         raise argparse.ArgumentTypeError(
             f'--num_gaussians must be a multiple of {GAUSSIAN_MULTIPLE}, got {ivalue:,} '
@@ -70,7 +89,8 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog='idol-gen', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='presets: ' + ',  '.join(
-            f'{name} (steps={p["steps"]}, gaussians={p["num_gaussians"]:,})' for name, p in PRESETS.items()))
+            f'{name} (steps={p["steps"]}, gaussians={p["num_gaussians"]:,})' for name, p in PRESETS.items())
+        + '\ndensity rungs: ' + ',  '.join(f'{name} = {value:,}' for name, value in DENSITY.items()))
     parser.add_argument('image', help='an image file, or a folder of images')
     parser.add_argument('-o', '--out', default='outputs', help='output directory (default: outputs)')
     parser.add_argument('--mode', choices=['synthetic', 'real'], default='synthetic',
@@ -81,8 +101,13 @@ def build_parser():
                              '(default: standard)')
     # quality levers
     parser.add_argument('--steps', type=positive_int, default=None, help='denoising steps (default: preset)')
-    parser.add_argument('--num_gaussians', '--gaussians', type=gaussians, default=None, metavar='N',
-                        help=f'{MIN_GAUSSIANS:,}-{MAX_GAUSSIANS:,}, multiple of {GAUSSIAN_MULTIPLE} (default: preset)')
+    density_group = parser.add_mutually_exclusive_group()
+    density_group.add_argument('--density', choices=list(DENSITY), default=None, metavar='{' + ','.join(DENSITY) + '}',
+                               help='easy density switch, independent of the preset: 32k, 64k, 128k, 256k, 512k, 1m '
+                                    '(= 32,768 .. 1,048,576 Gaussians). Overrides the preset.')
+    density_group.add_argument('--num_gaussians', '--gaussians', type=gaussians, default=None, metavar='N',
+                               help=f'exact count: {MIN_GAUSSIANS:,}-{MAX_GAUSSIANS:,}, multiple of '
+                                    f'{GAUSSIAN_MULTIPLE}, or shorthand like 256k / 1m (default: preset)')
     parser.add_argument('--cfg_strength', '--cfg', type=float, default=None, metavar='W',
                         help='classifier-free guidance: how strictly the object follows the image (default: preset)')
     parser.add_argument('--rescale_t', type=float, default=None, metavar='T',
@@ -119,6 +144,9 @@ def resolve(args, parser):
         if value is not None:
             settings[name] = value
             settings.setdefault('_overridden', []).append(name)
+    if args.density is not None:
+        settings['num_gaussians'] = DENSITY[args.density]
+        settings.setdefault('_overridden', []).append(f'density={args.density}')
     for name, value in settings.items():
         if not name.startswith('_'):
             setattr(args, name, value)
