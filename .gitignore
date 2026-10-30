@@ -1,0 +1,8 @@
+.venv/
+.uv-cache/
+outputs/
+*.ply
+__pycache__/
+*.py[cod]
+nohup.out
+idol-sdk/

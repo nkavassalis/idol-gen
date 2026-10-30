@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# idol-gen: one image -> a 3D Gaussian splat. Wrapper around scripts/generate.py in the project venv.
+#   ./idol-gen --help
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+venv="$here/.venv"
+[ -x "$venv/bin/python" ] || { echo "error: $venv missing — run scripts/setup.sh" >&2; exit 1; }
+export PYTHONNOUSERSITE=1                 # keep ~/.local/lib out of the way
+export PYTHONUNBUFFERED=1
+exec "$venv/bin/python" "$here/scripts/generate.py" "$@"

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# idol-test: run the offline smoke test (real Idol weights, stubbed gated image encoders).
+#   ./idol-test            # optimized sampling path (what idol-gen uses by default)
+#   ./idol-test --eager    # eager path
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+venv="$here/.venv"
+[ -x "$venv/bin/python" ] || { echo "error: $venv missing — run scripts/setup.sh" >&2; exit 1; }
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
+exec "$venv/bin/python" "$here/scripts/smoke_test.py" "$@"
