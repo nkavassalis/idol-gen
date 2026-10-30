@@ -6,6 +6,7 @@
 #   scripts/setup.sh --rebuild    delete .venv and start over
 #   scripts/setup.sh --no-weights skip the ~3.4 GB model weight download
 #   scripts/setup.sh --cpu        install without requiring an NVIDIA GPU (generation still needs CUDA)
+#   scripts/setup.sh --mesh       also install scikit-image + scipy, which idol-mesh (STL export) needs
 #
 #   SDK_TAG=v0.1.0 scripts/setup.sh    pin the upstream SDK to a tag or commit
 #
@@ -20,6 +21,7 @@ SDK_TAG="${SDK_TAG:-}"
 MODE=install
 WANT_WEIGHTS=1
 REQUIRE_GPU=1
+EXTRAS=view
 
 for arg in "$@"; do
   case "$arg" in
@@ -27,6 +29,7 @@ for arg in "$@"; do
     --rebuild) MODE=install; WANT_REBUILD=1 ;;
     --no-weights) WANT_WEIGHTS=0 ;;
     --cpu) REQUIRE_GPU=0 ;;
+    --mesh) EXTRAS="view,mesh" ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -94,10 +97,10 @@ if [ "$MODE" = install ]; then
 
   step "installing dependencies and the idol-gen CLI"
   if command -v uv >/dev/null 2>&1; then
-    VIRTUAL_ENV="$here/.venv" uv pip install -e ".[view]"
+    VIRTUAL_ENV="$here/.venv" uv pip install -e ".[$EXTRAS]"
     VIRTUAL_ENV="$here/.venv" uv pip install -e ./idol-sdk      # local clone wins over the git dependency
   else
-    .venv/bin/pip install -e ".[view]"
+    .venv/bin/pip install -e ".[$EXTRAS]"
     .venv/bin/pip install -e ./idol-sdk
   fi
 fi

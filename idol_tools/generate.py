@@ -114,6 +114,11 @@ def build_parser():
     parser.add_argument('--no_optimize', dest='optimize', action='store_false',
                         help='turn off the faster sampling (torch.compile, batched guidance, cuDNN attention, TF32)')
     parser.add_argument('--device', default=None, help='torch device, e.g. cuda, cuda:1, cpu (default: auto)')
+    parser.add_argument('--stl', action='store_true',
+                        help='also write a printable .stl next to each .ply '
+                             '(needs the mesh extra: scripts/setup.sh --mesh)')
+    parser.add_argument('--mesh_resolution', type=int, default=256,
+                        help='voxels along the longest axis for --stl; raise it for small parts you will print')
     parser.add_argument('--weights', default='speridlabs/idol', help='Hugging Face repo or local folder')
     parser.add_argument('--ply_convention', choices=['y-up', 'upstream'], default='y-up',
                         help="which way is up in the written .ply: 'y-up' (default) puts the object's up at "
@@ -191,10 +196,26 @@ def report(args, count):
           f'rescale_t={args.rescale_t}')
     print(f'  mode={args.mode}  crop_margin={args.crop_margin if args.crop_margin is not None else "from mode"}  '
           f'seed={args.seed}..{args.seed + args.variants - 1}  dinov3={args.dinov3_dtype}  '
-          f'optimize={"on" if args.optimize else "off"}  ply={args.ply_convention}')
+          f'optimize={"on" if args.optimize else "off"}  ply={args.ply_convention}  '
+          f'stl={"on" if args.stl else "off"}')
     if gpu:
         print(gpu)
     print(f'  out: {args.out}\n')
+
+
+def write_mesh(ply, args):
+    """--stl support. Best effort on purpose: a missing mesh extra must not throw away a finished generation."""
+    from idol_tools import mesh as mesh_io
+
+    try:
+        path, stats = mesh_io.mesh_file(ply, fmt='stl', resolution=args.mesh_resolution,
+                                        quiet=True, overwrite=True)
+    except (ValueError, RuntimeError, SystemExit) as error:                # noqa: BLE001 - report, keep going
+        print(f'  warning: no STL: {error}', file=sys.stderr)
+        return
+    if not stats.get('skipped'):
+        print(f'  stl: {os.path.relpath(path, args.out)}  ({stats["faces"]:,} faces, '
+              f'{stats["size_bytes"] / 1e6:.1f} MB, {"closed" if stats["watertight"] else "open"})')
 
 
 def main(argv=None):
@@ -270,6 +291,8 @@ def main(argv=None):
                 continue
             ply_io.save_ply(output.gaussian, ply, args.ply_convention)
             written.append(ply)
+            if args.stl:
+                write_mesh(ply, args)
             if args.save_preview:
                 output.preprocessed_image.save(os.path.join(args.out, f'{name}{suffix}_input.png'))
             if args.save_camera:

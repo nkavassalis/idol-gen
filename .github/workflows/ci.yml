@@ -64,17 +64,18 @@ jobs:
       - name: Shell syntax
         run: |
           bash -n scripts/setup.sh
-          for launcher in idol-gen idol-view idol-app idol-test; do bash -n "$launcher"; done
+          for launcher in idol-gen idol-view idol-app idol-mesh idol-test; do bash -n "$launcher"; done
       - name: Help screens render
         run: |
           python - <<'PY'
           import sys; sys.path.insert(0, '.')
           from idol_tools.generate import build_parser
           from idol_tools.viewer import build_parser as view_parser
+          from idol_tools.mesh import build_parser as mesh_parser
           from idol_tools.app import main as app_main
           import inspect
           assert 'viser' in inspect.getsource(app_main), 'the app should use viser'
-          for parser in (build_parser(), view_parser()):
+          for parser in (build_parser(), view_parser(), mesh_parser()):
               text = parser.format_help()
               assert 'usage' in text and len(text) > 200, parser.prog
               print(f'{parser.prog}: help ok ({len(text.splitlines())} lines)')

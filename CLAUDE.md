@@ -6,18 +6,23 @@ Public CLI + web app around the upstream `speridlabs/idol` image-to-3D SDK. Read
 
 - `idol_tools/generate.py` — the `idol-gen` CLI: presets, `--density`, validation, batch, `--serve`.
 - `idol_tools/viewer.py` — the `idol-view` browser viewer (viser) and the `.ply` → arrays conversion
-  (quaternion → covariance, SH-DC → RGB). `build_scene()` is split from `serve()` so it is testable.
+  (quaternion → covariance, SH-DC → RGB). `build_scene()` is split from `serve()` so it is testable. Also owns
+  the ground-plane logic (`UP_INDEX`, `GROUND_PLANE`, `floor_height`, `add_ground`) that the app reuses.
+- `idol_tools/ply.py` — our `.ply` writer (correct y-up rotation; `--ply_convention upstream` for upstream bytes).
+- `idol_tools/mesh.py` — `idol-mesh`: splats → printable mesh. Accumulates an opacity field (bucketed by kernel
+  footprint), marching cubes, floater filtering, outward winding, and its own binary STL/OBJ/mesh-PLY writers.
+  Optional extra (`scripts/setup.sh --mesh`); `idol-gen --stl` calls the same code.
 - `idol_tools/app.py` — the `idol-app` web UI: upload, quality levers, generate, view, download, all in one
   viser page. It reuses `generate.PRESETS`/`DENSITY` (so CLI and app cannot drift) and displays results by
   re-reading the `.ply` it just wrote. Generations are serialised on `AppState.lock`; errors go to the page.
 - `idol_tools/smoke_test.py` — the checks. `./idol-test`, `--eager`, or `--cli-only` (no GPU/weights; CI uses it).
   `FakeViser` drives the viewer and the app without a browser; `FakePipeline` drives the app without weights.
-- `idol-gen`, `idol-view`, `idol-app`, `idol-test` — bash launchers into `.venv` (prefer the installed console
-  scripts, fall back to `python -m idol_tools.<mod>`). Windows users take the console scripts / `-m` route.
-- `scripts/setup.sh` — env setup + diagnostics: `--check`, `--rebuild`, `--no-weights`, `--cpu`, `SDK_TAG=`.
+- `idol-gen`, `idol-view`, `idol-app`, `idol-mesh`, `idol-test` — bash launchers into `.venv` (prefer the installed
+  console scripts, fall back to `python -m idol_tools.<mod>`). Windows users take the console scripts / `-m` route.
+- `scripts/setup.sh` — env setup + diagnostics: `--check`, `--rebuild`, `--no-weights`, `--cpu`, `--mesh`, `SDK_TAG=`.
 - `idol-sdk/` — **upstream clone, read-only.** Never patch it to get something working; change `idol_tools/`,
   or pin with `SDK_TAG` and file the issue upstream.
-- `pyproject.toml` — our package (`idol-gen` console scripts, `[view]`/`[dev]` extras); depends on the SDK by
+- `pyproject.toml` — our package (`idol-*` console scripts, `[view]`/`[mesh]`/`[dev]` extras); depends on the SDK by
   git URL, and setup.sh then installs the local clone editable so it wins.
 - `docs/model-card.md` — archived model card (benchmarks, per-GPU timings, official flag table).
 - `.github/workflows/ci.yml` — ubuntu + windows, CPU torch, `ruff check .`, `smoke_test --cli-only`.
@@ -26,7 +31,8 @@ Public CLI + web app around the upstream `speridlabs/idol` image-to-3D SDK. Read
 
 - **Run the test before calling anything done.** `./idol-test` must pass (and `--cli-only` for CI). It covers
   the real weights, both sampling paths, PLY validity, determinism, the quaternion/covariance maths, the
-  `.ply` round trip incl. the z-up→y-up convention, and the CLI's preset/validation/batch logic. New flag →
+  `.ply` round trip incl. the z-up→y-up convention, STL/meshing against known volumes and thin-slab geometry,
+  and the CLI's preset/validation/batch logic. New flag →
   new check.
 - **Keep the gated encoders gated.** The stub in `smoke_test.py` exists so tests run without HF access. Never
   vendor, commit, or mirror DINOv3 / FLUX.2 VAE weights, and never route around `require_encoder_access` —
@@ -61,6 +67,14 @@ knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusi
 - A bad result is usually framing, not sampling: look at `<name>_input.png` before touching `--steps`.
 - Empty alpha from BiRefNet → `no object found in the image`; the image likely has no single dominant object.
 - OOM is caught and reported with the specific levers to pull rather than a stack trace.
+- **Meshing gotchas**, each learned the hard way: a binary STL record is **50 bytes** (12 float32 + uint16 — a
+  13th float column silently corrupts it for every slicer); the connected-component filter must **relabel**
+  vertices, never rebuild as a triangle soup, or every triangle becomes its own component; marching cubes
+  winding is not guaranteed outward, so flip on negative signed volume; and the field threshold is absolute,
+  so results are dilated by roughly `--radius` σ. The defaults (resolution 256, threshold 0.5, sigma 0.8,
+  keep-small 100) were measured against the demo stool and submarine — don't retune blind.
+- Mesh tests run under `--cli-only` (no GPU) but need the mesh extra; CI installs `.[dev]`, which includes
+  scikit-image and scipy for exactly that reason.
 - `serve()` blocks forever by design; tests must use `build_scene()` with the fake viser, never `serve()`.
 - The ground is a **floor**: its plane must be perpendicular to the up axis (`xz` for `+y`, `xy` for `+z` —
   asking for `xy` with a y-up scene gives a vertical wall through the object) and it sits at the lowest point

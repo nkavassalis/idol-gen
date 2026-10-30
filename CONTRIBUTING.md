@@ -45,6 +45,9 @@ docs/                     archived model card, notes
 ## Ideas that would be welcome
 
 - A `--compare` mode that loads two seeds side by side in the viewer with a sync-able camera.
+- Mesh export niceties: quadric decimation (`--decimate`), an adaptive-resolution octree so large flat areas
+  don't pay for 256³, a `--scale-mm` that writes the mesh at print size, and a `--hollow`/wall-thickness mode
+  that saves filament on chunky parts.
 - Turningtable renders (orbit a camera, export frames) so people without a splat viewer can still see results.
 - Batch presets: a TOML file of named settings per input type (product shot, figurine, logo).
 - Anything that makes the first-run experience clearer — the gated-encoder step is where people get stuck.

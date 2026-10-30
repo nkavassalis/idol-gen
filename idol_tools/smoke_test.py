@@ -414,6 +414,179 @@ def test_viewer():
         check('serving with nothing to view is refused', 'nothing to view' in str(error), str(error))
 
 
+# --------------------------------------------------------------------------- meshing section
+
+def _ball(count=6000, radius=0.30, sigma=0.012, seed=3):
+    """Uniform-ish points inside a ball, as isotropic splats: the shape whose volume we know exactly."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    direction = rng.normal(size=(count, 3))
+    direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+    r = radius * np.cbrt(rng.random((count, 1)))
+    centers = direction * r
+    covariances = np.repeat((sigma ** 2) * np.eye(3)[None], count, axis=0)
+    return centers, covariances, np.ones((count, 1))
+
+
+def test_mesh():
+    """Splats -> printable mesh: format correctness, known-volume reconstruction, and the failure modes
+    that actually ruin prints (dust, inverted winding, thin features lost)."""
+    import numpy as np
+
+    try:
+        from idol_tools import mesh as mesh_io
+    except ImportError as error:                                      # pragma: no cover - CI installs these
+        check('meshing dependencies import', False, str(error))
+        return
+    try:
+        mesh_io._require_mesh_deps()
+    except SystemExit as error:
+        check('scikit-image and scipy are installed for meshing', False, str(error))
+        return
+    check('scikit-image and scipy are installed for meshing', True)
+
+    print('\n== mesh: STL format on disk')
+    verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int64)
+    with tempfile.TemporaryDirectory() as out:
+        stl = os.path.join(out, 'tetra.stl')
+        mesh_io.write_stl(stl, verts, faces)
+        raw = open(stl, 'rb').read()
+        count = int(np.frombuffer(raw[80:84], dtype=np.uint32)[0])
+        check('binary STL is 84 + 50 bytes per triangle', len(raw) == 84 + 50 * len(faces),
+              f'{len(raw)} bytes for {len(faces)} triangles')
+        check('the STL header agrees with the triangles present', count == len(faces), str(count))
+        back, normals = mesh_io.read_stl(stl)
+        check('vertices round-trip through the STL',
+              np.allclose(back[[0, 1, 2]], verts[[0, 1, 2]], atol=1e-6), str(back[:3].tolist()))
+        length = np.linalg.norm(normals, axis=1)
+        check('every STL triangle carries a unit normal', np.allclose(length, 1.0, atol=1e-4),
+              f'lengths {np.round(length, 3).tolist()}')
+        obj = mesh_io.write_obj(os.path.join(out, 'tetra.obj'), verts, faces)
+        text = open(obj, encoding='utf-8').read().splitlines()
+        check('OBJ writes one v and one f line each',
+              sum(line.startswith('v ') for line in text) == 4 and sum(line.startswith('f ') for line in text) == 4)
+        mesh_io.write_mesh_ply(os.path.join(out, 'tetra.ply'), verts, faces)
+        check('mesh PLY is written', os.path.getsize(os.path.join(out, 'tetra.ply')) > 0)
+        try:
+            mesh_io.write_stl(os.path.join(out, 'bad.stl'), verts, faces[:, :2])
+            check('a malformed face array is refused', False, 'no error raised')
+        except Exception as error:                                    # noqa: BLE001 - any raise is fine
+            check('a malformed face array is refused', True, type(error).__name__)
+
+    print('\n== mesh: reconstructs a shape we can measure')
+    centers, covariances, opacities = _ball()
+    field, origin, voxel = mesh_io.solidity(centers, covariances, opacities, resolution=96, progress=None)
+    check('the field is densest inside the ball', field.max() > 3.0, f'max {field.max():.2f}')
+    vertices, triangles, stats = mesh_io.mesh_from_solidity(field, origin, voxel, threshold=0.5, min_faces=50)
+    expected = 4.0 / 3.0 * np.pi * 0.30 ** 3
+    check('extracted volume matches the known ball volume',
+          abs(stats['volume'] - expected) / expected < 0.20,
+          f'mesh {stats["volume"]:.4f} vs exact {expected:.4f}')
+    check('the ball is centred where it was built',
+          np.abs(vertices.mean(axis=0)).max() < 0.02, str(np.round(vertices.mean(axis=0), 3).tolist()))
+    check('the extracted surface is closed', stats['watertight'], f'{stats["faces"]} faces')
+    check('winding points outward (positive signed volume)',
+          mesh_io._signed_volume(vertices, triangles) > 0,
+          f'{mesh_io._signed_volume(vertices, triangles):.4f}')
+    check('the mesh shares vertices instead of a triangle soup',
+          len(vertices) < len(triangles) * 3 / 2, f'{len(vertices)} verts for {len(triangles)} faces')
+
+    print('\n== mesh: thin features survive (stool legs are the real test)')
+    rng = np.random.default_rng(7)
+    slab_xy = rng.uniform(-0.3, 0.3, size=(6000, 2))
+    slab = np.concatenate([slab_xy, rng.uniform(-0.02, 0.02, size=(6000, 1))], axis=1)
+    cov = np.repeat((0.01 ** 2) * np.eye(3)[None], len(slab), axis=0)
+    field, origin, voxel = mesh_io.solidity(slab, cov, np.ones((len(slab), 1)), resolution=128, progress=None)
+    vertices, triangles, stats = mesh_io.mesh_from_solidity(field, origin, voxel, threshold=0.5, min_faces=50)
+    thickness = stats['bbox_max'][2] - stats['bbox_min'][2]
+    check('a slab 4 cm thick at object scale still extracts', 0.03 < thickness < 0.10,
+          f'thickness {thickness:.3f} (built 0.04, voxel {voxel:.4f})')
+    check('and stays a single closed piece', stats['watertight'], f'{stats["faces"]} faces')
+    tight, _, tight_stats = mesh_io.solidity(slab, cov, np.ones((len(slab), 1)), resolution=128,
+                                             radius=1.5, progress=None), None, None
+    tight_vertices, _, tight_stats = mesh_io.mesh_from_solidity(
+        mesh_io.solidity(slab, cov, np.ones((len(slab), 1)), resolution=128, radius=1.5, progress=None)[0],
+        origin, voxel, threshold=0.5, min_faces=50)
+    tight_thickness = tight_stats['bbox_max'][2] - tight_stats['bbox_min'][2]
+    check('--radius controls the kernel spread, so tighter kernels shrink the dilation',
+          tight_thickness < thickness, f'radius 1.5 -> {tight_thickness:.3f} vs radius 3.0 -> {thickness:.3f}')
+    del tight
+
+    print('\n== mesh: floaters and dust are dropped')
+    # a floater big enough to survive thresholding, so the component filter is what removes it
+    base_centers, base_covariances, _ = _ball()
+    # one lone splat, which is what a floater actually is; it extracts as a ~190-face pebble
+    island = np.array([[0.9, 0.0, 0.0]]) + 0.02 * rng.normal(size=(1, 3))
+    island_cov = np.repeat((0.03 ** 2) * np.eye(3)[None], len(island), axis=0)
+    dusty_centers = np.concatenate([base_centers, island], axis=0)
+    dusty_covariances = np.concatenate([base_covariances, island_cov], axis=0)
+    field, origin, voxel = mesh_io.solidity(dusty_centers, dusty_covariances,
+                                            np.ones((len(dusty_centers), 1)), resolution=96, progress=None)
+    _, _, as_is = mesh_io.mesh_from_solidity(field, origin, voxel, threshold=0.5, min_faces=0)
+    vertices_as_is = mesh_io.mesh_from_solidity(field, origin, voxel, threshold=0.5, min_faces=0)[0]
+    vertices_cleaned, _, cleaned = mesh_io.mesh_from_solidity(field, origin, voxel, threshold=0.5, min_faces=300)
+    # the ball ends at x=0.3 and the island sits at x=0.9, so x>0.6 counts island vertices exactly
+    island_before = int((vertices_as_is[:, 0] > 0.6).sum())
+    island_after = int((vertices_cleaned[:, 0] > 0.6).sum())
+    check('a lone island shows up when nothing is filtered', island_before > 0, f'{island_before} island vertices')
+    check('floater islands are filtered out of the printable mesh',
+          island_after == 0 and cleaned['dropped_faces'] > 0,
+          f'{island_before} -> {island_after} island vertices, dropped {cleaned["dropped_faces"]} faces')
+    check('the main object survives filtering intact',
+          abs(cleaned['volume'] - as_is['volume']) / as_is['volume'] < 0.05,
+          f'{cleaned["volume"]:.4f} vs {as_is["volume"]:.4f}')
+
+    print('\n== mesh: bad input is refused with a usable message')
+    try:
+        mesh_io.solidity(np.zeros((0, 3)), np.zeros((0, 3, 3)), np.zeros((0, 1)))
+        check('no gaussians is refused', False, 'no error raised')
+    except ValueError as error:
+        check('no gaussians is refused', 'nothing to mesh' in str(error), str(error))
+    try:
+        mesh_io.solidity(np.zeros((4, 3)), np.zeros((4, 3)), np.ones((4, 1)))
+        check('a mis-shaped covariance matrix is refused', False, 'no error raised')
+    except ValueError as error:
+        check('a mis-shaped covariance matrix is refused', '(N, 3, 3)' in str(error), str(error)[:60])
+    transparent = _ball()[0]
+    try:
+        mesh_io.solidity(transparent, _ball()[1], np.zeros((len(transparent), 1)))
+        check('fully transparent splats are refused', False, 'no error raised')
+    except ValueError as error:
+        check('fully transparent splats are refused', 'nothing to mesh' in str(error), str(error))
+    field, origin, voxel = mesh_io.solidity(*_ball(), resolution=48, progress=None)
+    try:
+        mesh_io.mesh_from_solidity(field, origin, voxel, threshold=1e6)
+        check('a threshold above the field peak explains itself', False, 'no error raised')
+    except ValueError as error:
+        check('a threshold above the field peak explains itself', 'Lower --threshold' in str(error), str(error))
+    for kwargs, label in (({'resolution': 4}, 'resolution too small'), ({'resolution': 4096}, 'resolution too big'),
+                          ({'threshold': 0.0}, 'threshold not positive'), ({'fmt': 'fbx'}, 'unknown format')):
+        with tempfile.TemporaryDirectory() as scratch:
+            try:
+                mesh_io.mesh_file('nothing.ply', out_dir=scratch, **kwargs)
+                check(f'{label} is refused', False, 'no error raised')
+            except ValueError as error:
+                check(f'{label} is refused', True, str(error)[:60])
+
+    print('\n== mesh: the command line')
+    from idol_tools.mesh import build_parser
+
+    ns = build_parser().parse_args(['x.ply'])
+    check('idol-mesh defaults to a printable STL',
+          ns.format == 'stl' and ns.resolution == 256 and ns.threshold == 0.5 and ns.keep_small == 100,
+          f'{ns.format} {ns.resolution} {ns.threshold} {ns.keep_small}')
+    ns = build_parser().parse_args(['x.ply', '--format', 'obj', '--resolution', '512', '--keep-small', '500'])
+    check('the mesh levers parse', ns.format == 'obj' and ns.resolution == 512 and ns.keep_small == 500)
+    from idol_tools.generate import build_parser as gen_parser
+
+    ns = gen_parser().parse_args([EXAMPLE or 'x.png'])
+    check('STL export is opt-in on idol-gen', ns.stl is False and ns.mesh_resolution == 256)
+    ns = gen_parser().parse_args([EXAMPLE or 'x.png', '--stl'])
+    check('idol-gen --stl parses', ns.stl is True)
+
+
 # --------------------------------------------------------------------------- up-axis section
 
 def test_ply_convention():
@@ -858,6 +1031,7 @@ def main():
         test_cli(example)
         test_viewer()
         test_ply_convention()
+        test_mesh()
         test_app()
     else:
         import idol.pipeline as pipeline_module
@@ -883,6 +1057,7 @@ def main():
         test_cli(example)
         test_viewer()
         test_ply_convention()
+        test_mesh()
         test_app()
 
     print('\n' + ('ALL CHECKS PASSED' if not FAILURES else f'{len(FAILURES)} FAILED: {FAILURES}'))

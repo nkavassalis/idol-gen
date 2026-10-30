@@ -25,7 +25,7 @@ please cite their [project page](https://speridlabs.com/research/idol).
 ## Contents
 
 - [Requirements](#requirements) · [Install](#install) · [Quickstart](#quickstart)
-- [Web app](#web-app) · [Quality levers](#quality-levers) · [Viewing](#viewing) · [Batch](#batch)
+- [Web app](#web-app) · [Quality levers](#quality-levers) · [Viewing](#viewing) · [3D printing](#3d-printing) · [Batch](#batch)
 - [How it works](#how-it-works) · [Tests](#tests) · [Troubleshooting](#troubleshooting) · [License](#license)
 
 ## Requirements
@@ -70,6 +70,9 @@ python -m idol_tools.smoke_test --cli-only              # sanity check
 
 The `./idol-gen` wrappers are bash; on Windows call `python -m idol_tools.generate` / `idol_tools.viewer`,
 or the installed `idol-gen` / `idol-view` console scripts.
+
+Add `".[view,mesh]"` (or `scripts/setup.sh --mesh`) if you want STL export; it pulls in scikit-image and
+scipy for surface extraction. Everything else works without it.
 </details>
 
 ## Quickstart
@@ -81,6 +84,8 @@ or the installed `idol-gen` / `idol-view` console scripts.
 ./idol-gen render.png --preset high              # 75 steps, 524k
 ./idol-gen render.png --density 32k              # density only
 ./idol-gen render.png --serve --open             # generate, then view in the browser
+./idol-gen render.png --stl                      # also write a printable mesh next to the .ply
+./idol-mesh outputs/                             # or mesh existing .ply files later (stl / obj / ply)
 ```
 
 Every image writes:
@@ -88,6 +93,7 @@ Every image writes:
 | File | What it is |
 |---|---|
 | `<name>.ply` | the object, standard 3DGS — opens in [gsplat.tech](https://gsplat.tech), SuperSplat, Blender add-ons |
+| `<name>.stl` | only with `--stl`: a watertight triangle mesh for slicing and printing |
 | `<name>_input.png` | the 1024² image the model actually saw, after background removal and cropping |
 | `<name>_camera.json` | predicted yaw/pitch/radius/fov of the input view |
 
@@ -180,6 +186,47 @@ middle. Bind beyond localhost with `--host 0.0.0.0` if you are on a remote box.
 No install at all: drag a `.ply` onto [gsplat.tech](https://gsplat.tech) or the
 [SuperSplat editor](https://superspl.at/editor) — both parse the file client-side.
 
+## 3D printing
+
+Gaussian splats are not a surface, so `idol-mesh` reconstructs one. Each Gaussian deposits its opacity into a
+voxel grid as the ellipsoid it actually is, giving an accumulated "solidity" field; marching cubes then takes
+an isosurface of that field, small floating islands are dropped, and the winding is oriented so normals point
+outward. That matters for these files specifically: in an Idol output the median Gaussian is *smaller than a
+voxel* while others are flat sheets, so the obvious shortcut — splat the centres and blur — either shreds the
+thin parts or blobs the wide ones.
+
+```bash
+scripts/setup.sh --mesh                      # one-off: adds scikit-image + scipy
+
+./idol-gen render.png --stl                  # mesh as part of generating
+./idol-mesh outputs/                         # or mesh what you already have
+./idol-mesh outputs/ --info                  # field statistics: tells you where --threshold should sit
+./idol-mesh part.ply --resolution 512        # small part you intend to print: give it more voxels
+./idol-mesh part.ply --format obj            # or .ply (mesh), for importing into Blender/Meshlab
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--format` | `stl` | `stl` (binary, watertight, slicer-ready), `obj`, or `ply` (mesh) |
+| `--resolution` | `256` | voxels along the longest axis. A 5 cm figurine wants 512+; a quick check is fine at 128 |
+| `--threshold` | `0.5` | surface level of the accumulated field. Higher = tighter, shrink-wrapped, more holes |
+| `--radius` | `3.0` | how far each Gaussian spreads, in sigmas. Lower is tighter but noisier and thins delicate parts |
+| `--sigma` | `0.8` | pre-smoothing in voxels; closes the pinhole noise splats leave behind |
+| `--smooth` | `0` | Laplacian iterations on the result, for a print you want to sand less |
+| `--keep-small` | `100` | drop connected pieces below this many faces — the floaters that jam a printer |
+| `--subsample` | all | cap the Gaussians used, to speed up 1M-splat files |
+
+**What to expect.** This is a printable proxy, not a scan. Surfaces come out soft — the reconstruction is a
+level set of a density field, so fine engraving disappears and surfaces are slightly dilated (a slab 0.04
+thick extracts nearer 0.08 at the defaults; `--radius` tightens it). Thin features do survive: the stool's
+legs and foot ring, the submarine's propeller and periscope, both print-ready. Everything is measured in the
+model's own units — the object occupies roughly a 1-unit cube, so scale to your printer's mm in the slicer
+(a 1-unit object at 100 mm is a 10 cm print).
+
+The test suite checks this against ground truth rather than vibes: a synthetic ball of known radius must
+extract within 20% of its exact volume, a thin slab must survive at all, floaters must be filtered while the
+main piece stays intact, and the STL bytes must be exactly 84 + 50·triangles with outward normals.
+
 ## Batch
 
 ```bash
@@ -234,9 +281,10 @@ our `upstream` mode equals `idol-sdk`'s writer exactly.
 The full test loads the **real** Idol weights and only stubs the two gated encoders (random tokens of the
 right shape), so it runs offline. It checks Gaussian counts, finiteness, standard 3DGS PLY attributes, seed
 determinism vs. seed sensitivity, crop behaviour per mode, the quaternion/covariance maths, the `.ply`
-round trip including the z-up → y-up convention, every CLI flag's precedence, and the web app's controls,
-lever resolution, upload, generation, download and error handling against a fake viser server. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+round trip including the z-up → y-up convention, every CLI flag's precedence, the ground plane being a floor
+rather than a wall through the object, STL/meshing against known volumes and thin-slab geometry, and the web
+app's controls, lever resolution, upload, generation, download and error handling against a fake viser server.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Troubleshooting
 
@@ -252,6 +300,11 @@ lever resolution, upload, generation, download and error handling against a fake
 | `Failed to import diffusers... peft` | A user-site package is shadowing the venv. Keep `PYTHONNOUSERSITE=1` (the launchers set it) and re-run `scripts/setup.sh --rebuild`. |
 | `idol-app` page opens but Generate does nothing | Look at the terminal running it — usually the gated encoders (`scripts/setup.sh --check`). The page itself reports model errors inline. |
 | Result is upside down | `idol-gen` writes the object's up at **+y** by default, which is what splat viewers expect. If something still looks inverted, the app has an **Up axis** dropdown and a **Flip upside down** button (no reload needed), and `./idol-view x.ply --up -y` covers files written by someone else's tooling. |
+| `idol-mesh` says it needs scikit-image | `scripts/setup.sh --mesh`, or `pip install -e ".[mesh]"`. Generation and viewing never need it. |
+| STL is a pile of crumbs | Floaters: raise `--keep-small` (100 is the default; try 500–2000), and check `--info` for a stray-threshold problem. |
+| STL has holes or is falling apart | Lower `--threshold`, or raise `--sigma` to 1.5 to bridge gaps. `--info` prints where the field peak sits. |
+| STL lost thin features | Raise `--resolution` (the part needs several voxels across) and lower `--sigma`; a too-high `--threshold` also eats legs. |
+| STL looks inflated | Expected: accumulating 3σ kernels dilates surfaces. Lower `--radius` toward 1.5–2.0. |
 
 ## Privacy and licensing
 
