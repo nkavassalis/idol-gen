@@ -17,10 +17,12 @@ import os
 import threading
 import time
 
-import numpy as np
+# numpy, PIL and viser are imported where they are used, so `idol-app --help` stays dependency-free.
 
 
 def _blank_preview():
+    import numpy as np
+
     return np.zeros((1, 1, 3), dtype=np.uint8)
 
 
@@ -140,6 +142,8 @@ def build_ui(server, state):
         controls['download_last'] = server.gui.add_button('Download last .ply')
 
     def on_upload(event):
+        import numpy as np
+
         upload = event.target.value
         name, content = (upload.name, upload.content) if upload else ('upload', b'')
         try:
@@ -153,6 +157,8 @@ def build_ui(server, state):
         set_status(f'Ready: **{stem}** ({image.size[0]}x{image.size[1]}). Press Generate.')
 
     def on_generate(_event):
+        import numpy as np
+
         if state.uploaded is None:
             set_status('Upload an image first.')
             return
@@ -262,6 +268,7 @@ def main(argv=None):
         set_status('Model not loaded (started with --no-model).')
 
     if args.image:
+        import numpy as np
         from PIL import Image
 
         image = Image.open(args.image).convert('RGB')
