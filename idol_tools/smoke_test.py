@@ -217,7 +217,9 @@ class FakeViser:
             return self._add('image', kwargs.pop('label', None), image, **kwargs)
 
         def add_markdown(self, content, **kwargs):
-            return self._add('markdown', None, content, **kwargs)
+            handle = self._add('markdown', None, content, **kwargs)
+            handle.content = content          # viser's markdown handle exposes .content, and code assigns to it
+            return handle
 
     class _Scene:
         def __init__(self, log):
@@ -855,6 +857,85 @@ def test_app():
               and 'Traceback' not in boom_controls['status'].content, boom_controls['status'].content)
         check('the page recovers: the lock is free and progress is hidden',
               not boom.lock.locked() and boom_controls['progress'].visible is False)
+
+        print('\n== web app: STL export')
+        from idol_tools import mesh as mesh_io
+
+        check('the Print folder offers STL export at the CLI defaults',
+              ('checkbox', 'Offer .stl when done') in server.log
+              and ('button', 'Mesh and download .stl') in server.log
+              and int(controls['stl_resolution'].value) == mesh_io.DEFAULT_RESOLUTION
+              and float(controls['stl_threshold'].value) == mesh_io.DEFAULT_THRESHOLD
+              and int(controls['stl_keep_small'].value) == mesh_io.DEFAULT_KEEP_SMALL,
+              f"{controls['stl_resolution'].value}/{controls['stl_threshold'].value}"
+              f"/{controls['stl_keep_small'].value}")
+
+        # the page's own fake object is deliberately sparse; meshing needs splats wider than a voxel
+        mesh_generator = torch.Generator().manual_seed(11)
+        blob = Gaussian(raw_xyz=torch.rand(3000, 3, generator=mesh_generator) - 0.5,
+                        features_dc=torch.randn(3000, 1, 3, generator=mesh_generator) * 0.4,
+                        raw_scaling=torch.full((3000, 3), -1.0),
+                        raw_rotation=torch.randn(3000, 4, generator=mesh_generator),
+                        raw_opacity=torch.zeros((3000, 1)),
+                        scaling_bias=0.1, opacity_bias=0.9, minimum_kernel_size=0.0009)
+
+        class BlobOutput:
+            def __init__(self):
+                self.gaussian = blob
+                self.preprocessed_image = Image.new('RGB', (16, 16), (8, 8, 8))
+                self.camera = {'yaw': 0.1, 'pitch': 0.2, 'radius': 1.0, 'fov': 40.0}
+
+        class BlobPipeline:
+            def __call__(self, image, **kwargs):
+                return BlobOutput()
+
+        blob_state = app_module.AppState(BlobPipeline(), out)
+        blob_server = FakeViser.ViserServer()
+        blob_controls, _ = app_module.build_ui(blob_server, blob_state)
+        buffer = io.BytesIO()
+        Image.new('RGB', (16, 16)).save(buffer, format='PNG')
+        blob_controls['upload'].fire(types.SimpleNamespace(name='blob.png', content=buffer.getvalue()))
+        blob_controls['generate'].fire()
+        blob_controls['stl_resolution'].value = 48
+        blob_controls['stl_keep_small'].value = 0
+
+        blob_controls['stl_now'].fire()
+        sent = [e for e in blob_server.log if e[0] == 'download' and e[1].endswith('.stl')]
+        check('Mesh and download .stl sends the file', bool(sent) and sent[-1][1].endswith('.stl'), str(sent[-1:]))
+        if sent:
+            written = [f for f in os.listdir(out) if f.endswith('.stl')]
+            verts, _normals = mesh_io.read_stl(os.path.join(out, written[0]))
+            check('the STL the page sent parses as triangles',
+                  len(verts) > 0 and len(verts) % 3 == 0, f'{len(verts) // 3} triangles')
+            check('the page reports the mesh it made', 'faces' in blob_controls['status'].content,
+                  blob_controls['status'].content)
+
+        blob_controls['stl_after'].value = True
+        blob_controls['download'].value = True
+        blob_server.log.clear()
+        blob_controls['generate'].fire()
+        kinds = sorted({os.path.splitext(entry[1])[1] for entry in blob_server.log if entry[0] == 'download'})
+        check('offering .stl when done sends both files', kinds == ['.ply', '.stl'], str(kinds))
+
+        print('\n== web app: STL export without the mesh extra')
+        original_available = mesh_io.available
+        mesh_io.available = lambda: False
+        downloads_before = len([e for e in blob_server.log if e[0] == 'download'])
+        no_mesh_controls = None
+        try:
+            blob_controls['stl_now'].fire()
+            check('a missing mesh extra is explained on the page, not crashed',
+                  'setup.sh --mesh' in blob_controls['status'].content
+                  and len([e for e in blob_server.log if e[0] == 'download']) == downloads_before,
+                  blob_controls['status'].content)
+            no_mesh_controls, _ = app_module.build_ui(FakeViser.ViserServer(), app_module.AppState(BlobPipeline(), out))
+        finally:
+            mesh_io.available = original_available
+        check('the page still builds without the extra, with the controls disabled',
+              no_mesh_controls is not None
+              and getattr(no_mesh_controls['stl_now'], 'disabled', False) is True
+              and 'setup.sh --mesh' in no_mesh_controls['stl_note'].content,
+              '' if no_mesh_controls is None else no_mesh_controls['stl_note'].content)
 
         idle = app_module.AppState(FakePipeline(), out)
         idle_controls, _ = app_module.build_ui(FakeViser.ViserServer(), idle)

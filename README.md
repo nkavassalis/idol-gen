@@ -126,6 +126,12 @@ so an object that lands the wrong way round is one click to fix — no reload. T
 (the slider's bottom value means "auto"), so objects look like they are standing on something rather than
 being sliced through the middle by a grid.
 
+The **Print** folder does STL export without leaving the page: **Mesh and download .stl** meshes the selected
+object and hands the file to your browser, and **Offer .stl when done** adds it next to every generation. Its
+three levers (resolution, surface threshold, drop-pieces-under) default to exactly the `idol-mesh` values, so
+the page and the command line cannot drift apart. If the optional mesh extra is not installed the page still
+boots — the controls are greyed out and the folder tells you to run `scripts/setup.sh --mesh`.
+
 <details>
 <summary>Upstream also ships a Gradio demo</summary>
 
@@ -204,6 +210,9 @@ scripts/setup.sh --mesh                      # one-off: adds scikit-image + scip
 ./idol-mesh part.ply --resolution 512        # small part you intend to print: give it more voxels
 ./idol-mesh part.ply --format obj            # or .ply (mesh), for importing into Blender/Meshlab
 ```
+
+The web app does the same thing from the **Print** folder — **Mesh and download .stl** for the object on
+screen, or **Offer .stl when done** to get one with every generation.
 
 | Flag | Default | What it does |
 |---|---|---|

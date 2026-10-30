@@ -27,6 +27,16 @@ DEFAULT_KEEP_SMALL = 100        # drop connected components smaller than this ma
 FORMATS = ('stl', 'obj', 'ply')
 
 
+def available():
+    """True when the optional meshing dependencies are importable. Lets the web app boot and grey out the
+    STL controls instead of crashing when someone has not installed the mesh extra."""
+    import importlib.util
+
+    return (importlib.util.find_spec('skimage') is not None
+            and importlib.util.find_spec('scipy') is not None
+            and importlib.util.find_spec('plyfile') is not None)
+
+
 def _require_mesh_deps():
     try:
         from scipy.ndimage import gaussian_filter

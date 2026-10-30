@@ -12,9 +12,11 @@ Public CLI + web app around the upstream `speridlabs/idol` image-to-3D SDK. Read
 - `idol_tools/mesh.py` — `idol-mesh`: splats → printable mesh. Accumulates an opacity field (bucketed by kernel
   footprint), marching cubes, floater filtering, outward winding, and its own binary STL/OBJ/mesh-PLY writers.
   Optional extra (`scripts/setup.sh --mesh`); `idol-gen --stl` calls the same code.
-- `idol_tools/app.py` — the `idol-app` web UI: upload, quality levers, generate, view, download, all in one
-  viser page. It reuses `generate.PRESETS`/`DENSITY` (so CLI and app cannot drift) and displays results by
+- `idol_tools/app.py` — the `idol-app` web UI: upload, quality levers, generate, view, download, and STL
+  export (the Print folder), all in one viser page. It reuses `generate.PRESETS`/`DENSITY` so the page and the
+  CLI cannot drift, takes its mesh defaults from `mesh.DEFAULT_*` for the same reason, and displays results by
   re-reading the `.ply` it just wrote. Generations are serialised on `AppState.lock`; errors go to the page.
+  It boots without the mesh extra — `mesh.available()` decides whether the Print controls are disabled.
 - `idol_tools/smoke_test.py` — the checks. `./idol-test`, `--eager`, or `--cli-only` (no GPU/weights; CI uses it).
   `FakeViser` drives the viewer and the app without a browser; `FakePipeline` drives the app without weights.
 - `idol-gen`, `idol-view`, `idol-app`, `idol-mesh`, `idol-test` — bash launchers into `.venv` (prefer the installed

@@ -165,6 +165,33 @@ def build_ui(server, state):
                                                           hint='the lowest slider value means: sit it on the '
                                                                'bottom of the object')
 
+    from idol_tools import mesh as mesh_io
+
+    have_mesh = mesh_io.available()
+    with server.gui.add_folder('Print'):
+        controls['stl_after'] = server.gui.add_checkbox('Offer .stl when done', initial_value=False)
+        controls['stl_now'] = server.gui.add_button('Mesh and download .stl')
+        controls['stl_resolution'] = server.gui.add_slider('Mesh resolution', min=32, max=512, step=32,
+                                                           initial_value=mesh_io.DEFAULT_RESOLUTION,
+                                                           hint='voxels along the longest axis; raise it for '
+                                                                'small parts you intend to print')
+        controls['stl_threshold'] = server.gui.add_slider('Surface threshold', min=0.05, max=3.0, step=0.05,
+                                                          initial_value=mesh_io.DEFAULT_THRESHOLD,
+                                                          hint='level of the accumulated opacity field; higher '
+                                                               'is tighter but leaves holes')
+        controls['stl_keep_small'] = server.gui.add_slider('Drop pieces under (faces)', min=0, max=2000, step=50,
+                                                           initial_value=mesh_io.DEFAULT_KEEP_SMALL,
+                                                           hint='floaters and dust that would jam a printer')
+        controls['stl_note'] = server.gui.add_markdown('' if have_mesh else
+                                                       'STL export needs the mesh extra: '
+                                                       '`scripts/setup.sh --mesh`, then reload the page.')
+        if not have_mesh:
+            for key in ('stl_after', 'stl_now', 'stl_resolution', 'stl_threshold', 'stl_keep_small'):
+                try:
+                    controls[key].disabled = True
+                except Exception:                                      # noqa: BLE001 - cosmetic on old viser
+                    pass
+
     def on_upload(event):
         import numpy as np
 
@@ -215,7 +242,15 @@ def build_ui(server, state):
             if controls['download'].value:
                 with open(ply, 'rb') as handle:
                     server.send_file_download(f'{name}.ply', handle.read())
-            set_status(f'**{name}**: {obj["count"]:,} Gaussians in {time.time() - started:.1f}s -> `{ply}`')
+            extra = ''
+            if controls['stl_after'].value:
+                meshed = make_stl(name)
+                if meshed:
+                    stl_path, stl_stats = meshed
+                    with open(stl_path, 'rb') as handle:
+                        server.send_file_download(os.path.basename(stl_path), handle.read())
+                    extra = f', {stl_stats["faces"]:,}-face STL'
+            set_status(f'**{name}**: {obj["count"]:,} Gaussians in {time.time() - started:.1f}s -> `{ply}`{extra}')
         except Exception as error:                                    # noqa: BLE001 - report to the page, not the log
             set_status(f'`{type(error).__name__}` {error}')
             if os.environ.get('IDOL_DEBUG'):
@@ -232,6 +267,41 @@ def build_ui(server, state):
             return
         with open(state.objects[state.last]['path'], 'rb') as handle:
             server.send_file_download(os.path.basename(state.objects[state.last]['path']), handle.read())
+
+    def make_stl(name):
+        """Mesh the .ply we wrote for `name`, using the Print folder's levers. Returns (path, stats) or None,
+        with the reason already on the page — a failed mesh must never lose the generation itself."""
+        from idol_tools import mesh as mesh_io
+
+        record = state.objects.get(name)
+        if record is None:
+            set_status(f'Nothing to mesh for **{name}** yet.')
+            return None
+        if not mesh_io.available():
+            set_status('STL export needs the mesh extra: run `scripts/setup.sh --mesh`, then reload the page.')
+            return None
+        resolution = int(controls['stl_resolution'].value)
+        set_status(f'Meshing **{name}** at {resolution}^3 …')
+        try:
+            return mesh_io.mesh_file(record['path'], out_dir=state.out_dir, fmt='stl', resolution=resolution,
+                                     threshold=float(controls['stl_threshold'].value),
+                                     min_faces=int(controls['stl_keep_small'].value), quiet=True, overwrite=True)
+        except (ValueError, RuntimeError) as error:                    # noqa: BLE001 - report to the page
+            set_status(f'Could not mesh **{name}**: {error}')
+            return None
+
+    def on_stl_now(_event):
+        if not state.last:
+            set_status('Nothing to download yet.')
+            return
+        meshed = make_stl(state.last)
+        if not meshed:
+            return
+        stl_path, stl_stats = meshed
+        with open(stl_path, 'rb') as handle:
+            server.send_file_download(os.path.basename(stl_path), handle.read())
+        set_status(f'**{state.last}**: {stl_stats["faces"]:,} faces, '
+                   f'{"closed" if stl_stats["watertight"] else "open"} -> `{stl_path}`')
 
     def on_preset(event):
         apply_preset(controls, event.target.value)
@@ -280,6 +350,7 @@ def build_ui(server, state):
     controls['upload'].on_upload(on_upload)
     controls['generate'].on_click(on_generate)
     controls['download_last'].on_click(on_download_last)
+    controls['stl_now'].on_click(on_stl_now)
     controls['up'].on_update(on_up)
     controls['flip'].on_click(on_flip)
     controls['ground'].on_update(on_ground_toggle)
