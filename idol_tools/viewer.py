@@ -189,8 +189,9 @@ def build_parser():
     parser.add_argument('--host', default='127.0.0.1',
                         help='bind address; 0.0.0.0 to let others on your network in (default: localhost only)')
     parser.add_argument('--port', type=int, default=8080)
-    parser.add_argument('--up', choices=['y', 'z'], default='y',
-                        help='up axis of the files: y for the .ply Idol writes (default), z for SDK-native')
+    parser.add_argument('--up', choices=['+y', '-y', '+z', '-z'], default='+y',
+                        help='up axis of the files: +y for what idol-gen writes (default); -y matches '
+                             'idol-sdk\'s own save_ply, whose objects hang upside down in y-up viewers')
     parser.add_argument('--limit', type=int, default=24, help='max objects to load from folders (default: 24)')
     parser.add_argument('--open', action='store_true', help='open the browser automatically')
     parser.add_argument('--info', action='store_true', help='print what would be loaded and exit')
@@ -217,7 +218,7 @@ def main(argv=None):
             objects.append(load_ply(path))
         except ValueError as error:
             print(f'skipping: {error}', file=sys.stderr)
-    return serve(objects, host=args.host, port=args.port, up=f'+{args.up}', open_browser=args.open)
+    return serve(objects, host=args.host, port=args.port, up=args.up, open_browser=args.open)
 
 
 if __name__ == '__main__':

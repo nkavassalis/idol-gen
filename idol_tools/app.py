@@ -30,13 +30,18 @@ class AppState:
     """What the page knows right now: the uploaded image, the objects generated, and a lock so two
     visitors cannot drive the GPU at the same time."""
 
-    def __init__(self, pipeline, out_dir):
+    def __init__(self, pipeline, out_dir, ply_convention='y-up'):
+        from idol_tools.ply import UP_AXIS
+
         self.pipeline = pipeline
         self.out_dir = out_dir
+        self.ply_convention = ply_convention
+        self.up = UP_AXIS.get(ply_convention, '+y')   # what the files we write consider up
         self.uploaded = None            # (stem, PIL.Image)
         self.lock = threading.Lock()
         self.objects = {}               # name -> {'path': str, 'handle': ..., 'checkbox': ..., 'count': int}
         self.last = None
+        self.grid = None
 
     def settings(self, controls):
         """Resolve the form into pipeline kwargs, mirroring idol-gen's preset/flag precedence.
@@ -141,6 +146,10 @@ def build_ui(server, state):
         controls['status'] = server.gui.add_markdown(status['text'])
         controls['download_last'] = server.gui.add_button('Download last .ply')
 
+    with server.gui.add_folder('View'):
+        controls['up'] = server.gui.add_dropdown('Up axis', ['+y', '-y', '+z', '-z'], initial_value=state.up)
+        controls['flip'] = server.gui.add_button('Flip upside down')
+
     def on_upload(event):
         import numpy as np
 
@@ -180,7 +189,9 @@ def build_ui(server, state):
             output = state.pipeline(image, verbose=False, **settings)
             os.makedirs(state.out_dir, exist_ok=True)
             ply = os.path.join(state.out_dir, f'{name}.ply')
-            output.gaussian.save_ply(ply)
+            from idol_tools import ply as ply_io
+
+            ply_io.save_ply(output.gaussian, ply, state.ply_convention)
             output.preprocessed_image.save(os.path.join(state.out_dir, f'{name}_input.png'))
             with open(os.path.join(state.out_dir, f'{name}_camera.json'), 'w') as handle:
                 json.dump(output.camera, handle, indent=2)
@@ -211,15 +222,35 @@ def build_ui(server, state):
         if rung in _density_map():
             controls['gaussians'].value = _density_map()[rung]
 
+    def set_up(axis):
+        """Tell viser which way is up, and lay the ground grid in the matching plane."""
+        state.up = axis
+        server.scene.set_up_direction(axis)
+        if state.grid is not None:
+            try:
+                state.grid.remove()
+            except Exception:                                          # noqa: BLE001 - cosmetic only
+                pass
+        state.grid = server.scene.add_grid('/ground', plane='xy' if axis in ('+y', '-y') else 'xz',
+                                           width=2.0, height=2.0, cell_size=0.1, cell_color=(70, 70, 70),
+                                           section_size=0.5, section_thickness=3)
+
+    def on_up(event):
+        set_up(event.target.value)
+
+    def on_flip(_event):
+        controls['up'].value = {'+y': '-y', '-y': '+y', '+z': '-z', '-z': '+z'}[controls['up'].value]
+        set_up(controls['up'].value)
+
     controls['upload'].on_upload(on_upload)
     controls['generate'].on_click(on_generate)
     controls['download_last'].on_click(on_download_last)
+    controls['up'].on_update(on_up)
+    controls['flip'].on_click(on_flip)
     controls['preset'].on_update(on_preset)
     controls['density'].on_update(on_density)
 
-    server.scene.set_up_direction('+y')
-    server.scene.add_grid('/ground', plane='xy', width=2.0, height=2.0, cell_size=0.1,
-                          cell_color=(70, 70, 70), section_size=0.5, section_thickness=3)
+    set_up(state.up)
     return controls, set_status
 
 
@@ -250,6 +281,9 @@ def main(argv=None):
     parser.add_argument('--open', action='store_true', help='open the browser when the server is up')
     parser.add_argument('--no-model', dest='load_weights', action='store_false',
                         help='start the page without loading the model (checks the UI and wiring only)')
+    parser.add_argument('--ply_convention', choices=['y-up', 'upstream'], default='y-up',
+                        help="'y-up' (default) writes objects the right way up for splat viewers; "
+                             "'upstream' matches idol-sdk's save_ply, which comes out upside down")
     args = parser.parse_args(argv)
 
     try:
@@ -259,7 +293,7 @@ def main(argv=None):
 
     pipeline = load_pipeline(args) if args.load_weights else None
     server = viser.ViserServer(host=args.host, port=args.port)
-    state = AppState(pipeline, args.out)
+    state = AppState(pipeline, args.out, args.ply_convention)
     controls, set_status = build_ui(server, state)
 
     if pipeline is not None:

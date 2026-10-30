@@ -52,8 +52,12 @@ knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusi
 - `--num_gaussians` must be a multiple of 32 and ≥ 32,768 — the SDK would otherwise silently round down, so
   the CLI validates and suggests the nearest valid value. `--density` avoids the question entirely.
 - `k`/`m` in density values are 1024/1024² (`256k` = 262,144), matching the model's power-of-two rungs.
-- The SDK's `Gaussian` is z-up; `save_ply` rotates to y-up for viewers. The viser viewer keeps y-up and tells
-  viser the up axis — don't "fix" one side without checking `test_viewer`'s axis check.
+- **Up axis.** The SDK's `Gaussian` is z-up (verified: rendering from the object's own predicted camera with
+  world up +z reproduces the input image). Upstream's `save_ply` rotates +90° about x, which sends up to **-y**
+  — upside down for every y-up viewer. We write the file ourselves (`idol_tools/ply.py`) with -90° about x so
+  up is **+y**; `--ply_convention upstream` reproduces upstream's bytes exactly, and `UP_AXIS` is the single
+  source of truth the viewer and app read. `test_ply_convention` pins all of it — do not "simplify" the
+  rotation back without checking that test and the README section.
 - A bad result is usually framing, not sampling: look at `<name>_input.png` before touching `--steps`.
 - Empty alpha from BiRefNet → `no object found in the image`; the image likely has no single dominant object.
 - OOM is caught and reported with the specific levers to pull rather than a stack trace.

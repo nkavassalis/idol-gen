@@ -115,6 +115,10 @@ def build_parser():
                         help='turn off the faster sampling (torch.compile, batched guidance, cuDNN attention, TF32)')
     parser.add_argument('--device', default=None, help='torch device, e.g. cuda, cuda:1, cpu (default: auto)')
     parser.add_argument('--weights', default='speridlabs/idol', help='Hugging Face repo or local folder')
+    parser.add_argument('--ply_convention', choices=['y-up', 'upstream'], default='y-up',
+                        help="which way is up in the written .ply: 'y-up' (default) puts the object's up at "
+                             "+y, where splat viewers look for it; 'upstream' reproduces idol-sdk's rotation "
+                             "exactly, which leaves the object upside down in y-up viewers")
     # bookkeeping
     parser.add_argument('--skip-existing', action='store_true', help='skip images whose .ply is already in --out')
     parser.add_argument('--serve', action='store_true',
@@ -187,7 +191,7 @@ def report(args, count):
           f'rescale_t={args.rescale_t}')
     print(f'  mode={args.mode}  crop_margin={args.crop_margin if args.crop_margin is not None else "from mode"}  '
           f'seed={args.seed}..{args.seed + args.variants - 1}  dinov3={args.dinov3_dtype}  '
-          f'optimize={"on" if args.optimize else "off"}')
+          f'optimize={"on" if args.optimize else "off"}  ply={args.ply_convention}')
     if gpu:
         print(gpu)
     print(f'  out: {args.out}\n')
@@ -228,6 +232,8 @@ def main(argv=None):
     from idol.conditioning import EncoderAccessError
     from idol.pipeline import IdolPipeline
 
+    from idol_tools import ply as ply_io
+
     report(args, len(images))
     t0 = time.time()
     try:
@@ -262,7 +268,7 @@ def main(argv=None):
                       f'--dinov3_dtype bf16, or --preset draft.', file=sys.stderr)
                 failures += 1
                 continue
-            output.gaussian.save_ply(ply)
+            ply_io.save_ply(output.gaussian, ply, args.ply_convention)
             written.append(ply)
             if args.save_preview:
                 output.preprocessed_image.save(os.path.join(args.out, f'{name}{suffix}_input.png'))

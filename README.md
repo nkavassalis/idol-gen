@@ -114,6 +114,10 @@ Still fully local — the browser does the rendering and the only network traffi
 remains the way to batch a folder or script things; the app and the CLI share the same preset, density and
 validation code, so they cannot drift apart.
 
+The **View** panel has an **Up axis** dropdown (`+y` / `-y` / `+z` / `-z`) and a **Flip upside down** button,
+so an object that lands the wrong way round is one click to fix — no reload, and the ground grid follows the
+axis you pick.
+
 <details>
 <summary>Upstream also ships a Gradio demo</summary>
 
@@ -135,6 +139,7 @@ Ordered roughly by impact. `--dry-run` prints what would run without spending GP
 | `--cfg_strength` | 3.0 | How strictly the object follows the input. Higher hugs the image (and can artifact); `0` is unconditional. |
 | `--rescale_t` | 3.0 | Noise-schedule shift: >1 spends more steps on overall shape, <1 on fine detail. |
 | `--mode` | `synthetic` | Crop room around the object: `synthetic` 1.2 for renders, `real` 1.7 for photos. |
+| `--ply_convention` | `y-up` | Which way is up in the file. `y-up` (default) puts the object's up at +y, where splat viewers expect it. `upstream` reproduces `idol-sdk`'s own `save_ply` byte-for-byte, which leaves objects upside down in y-up viewers — see [why we differ](#why-idol-gen-rewrites-the-ply). |
 | `--crop_margin` | from mode | Override it directly: square side = object bbox × this. |
 | `--seed` / `--variants N` | 42 / 1 | Same seed reproduces exactly. `--variants 3` writes three consecutive seeds so you can pick. |
 | `--dinov3_dtype fp32` | `bf16` | Full-precision image encoder, ~1.7 GB more VRAM. |
@@ -161,6 +166,7 @@ usual cause of nibbled silhouettes.
 ./idol-view outputs/                    # every .ply in the folder, checkbox per object
 ./idol-view outputs/donut.ply --port 9000 --open
 ./idol-view outputs/ --info             # just list counts and extents
+./idol-view foreign.ply --up -y         # files whose up axis is not +y
 ./idol-gen render.png --serve --open    # generate, then serve, and block until Ctrl-C
 ```
 
@@ -198,6 +204,22 @@ re-reading the `.ply` it just wrote — so what you see on screen is provably wh
 are serialised behind a lock (one GPU, one job at a time) and failures are reported in the page rather than
 the console.
 
+## Why idol-gen rewrites the .ply
+
+The upstream SDK's `Gaussian.save_ply` describes itself as turning a z-up object into the y-up convention,
+but it rotates by **+90° about x**, which maps the object's up from +z to **−y** — so the finished `.ply`
+lands upside down in gsplat.tech, SuperSplat, Blender add-ons and anything else that assumes +y is up.
+
+That was checked against the model rather than assumed: rendering a generated object from its *own predicted
+camera* with world up +z reproduces the input photo (a stool's seat on top, foot ring at the bottom), while
+world up −z stands it on its head; and the predicted camera pitch is positive for images that clearly show
+the top of the object. So +z is genuinely up in the model's frame.
+
+`idol_tools/ply.py` therefore writes the file itself, rotating by **−90° about x** so up lands at +y. Pass
+`--ply_convention upstream` for byte-identical-to-upstream output, and use the app's **Up axis** / **Flip**
+controls when a file came from somewhere else. A regression test pins all of this, including the claim that
+our `upstream` mode equals `idol-sdk`'s writer exactly.
+
 ## Tests
 
 ```bash
@@ -226,7 +248,7 @@ lever resolution, upload, generation, download and error handling against a fake
 | First image is slow | `torch.compile`. Subsequent images in the process are the real speed. |
 | `Failed to import diffusers... peft` | A user-site package is shadowing the venv. Keep `PYTHONNOUSERSITE=1` (the launchers set it) and re-run `scripts/setup.sh --rebuild`. |
 | `idol-app` page opens but Generate does nothing | Look at the terminal running it — usually the gated encoders (`scripts/setup.sh --check`). The page itself reports model errors inline. |
-| Result looks like it's lying on its back | Up-axis mismatch in *your* viewer, not the file: Idol writes y-up like other 3DGS tools. `./idol-view x.ply --up z` for SDK-native files. |
+| Result is upside down | `idol-gen` writes the object's up at **+y** by default, which is what splat viewers expect. If something still looks inverted, the app has an **Up axis** dropdown and a **Flip upside down** button (no reload needed), and `./idol-view x.ply --up -y` covers files written by someone else's tooling. |
 
 ## Privacy and licensing
 

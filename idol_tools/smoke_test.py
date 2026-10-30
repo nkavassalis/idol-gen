@@ -168,6 +168,9 @@ class FakeNode:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
 
+    def remove(self):
+        self.removed = True
+
 
 class FakeViser:
     """Records everything the app and viewer do, so wiring is tested without a browser or a port."""
@@ -304,7 +307,7 @@ def test_viewer():
         check('covariance eigenvalues recover the stored scales',
               np.allclose(recovered, np.sort(scales ** 2, axis=1), atol=1e-6),
               f'max err {np.abs(recovered - np.sort(scales ** 2, axis=1)).max():.2e}')
-        check('PLY is y-up: save_ply rotates the SDK z-up object for viewers',
+        check("upstream's save_ply maps the SDK's +z up to -y (the upside-down case we write around)",
               np.allclose(obj['centers'], np.stack([gaussian.xyz.numpy()[:, 0],
                                                     -gaussian.xyz.numpy()[:, 2],
                                                     gaussian.xyz.numpy()[:, 1]], axis=-1), atol=1e-5),
@@ -393,6 +396,86 @@ def test_viewer():
         check('serving with nothing to view is refused', 'nothing to view' in str(error), str(error))
 
 
+# --------------------------------------------------------------------------- up-axis section
+
+def test_ply_convention():
+    """The bug this guards: upstream's save_ply rotates +90 about x, so the object's up lands at -y and every
+    y-up viewer shows the result upside down. Verified against the model itself: rendering the object from its
+    own predicted camera with world up +z reproduces the input image."""
+    import numpy as np
+    from idol.gaussian import Gaussian
+
+    from idol_tools import ply as ply_io
+    from idol_tools import viewer
+
+    print('\n== up axis: which way the .ply points')
+    # one Gaussian at each extreme of the SDK's z-up cube; index 0 is the top of the object
+    raw_xyz = torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+    generator = torch.Generator().manual_seed(1)
+    jitter = 0.05 * torch.randn(4, 4, generator=generator)
+    gaussian = Gaussian(raw_xyz=raw_xyz,
+                        features_dc=torch.rand(4, 1, 3, generator=generator),
+                        raw_scaling=torch.full((4, 3), -3.0),
+                        raw_rotation=torch.tensor([[1., 0., 0., 0.]]).repeat(4, 1) + jitter,
+                        raw_opacity=torch.zeros(4, 1),
+                        scaling_bias=0.004, opacity_bias=0.1, minimum_kernel_size=0.0009)
+    check('the test object has a clear top in the SDK frame',
+          int(gaussian.xyz[:, 2].argmax()) == 0, str(gaussian.xyz[:, 2].tolist()))
+
+    with tempfile.TemporaryDirectory() as out:
+        ours = os.path.join(out, 'ours.ply')
+        theirs = os.path.join(out, 'theirs.ply')
+        upstream_style = os.path.join(out, 'upstream_style.ply')
+        ply_io.save_ply(gaussian, ours, 'y-up')
+        ply_io.save_ply(gaussian, theirs, 'upstream')
+        gaussian.save_ply(upstream_style)
+
+        up_y = viewer.load_ply(ours)
+        down_y = viewer.load_ply(theirs)
+        check("idol-gen's 'y-up' puts the object's top at +y",
+              int(np.argmax(up_y['centers'][:, 1])) == 0 and up_y['centers'][0, 1] > 0,
+              f"top at y={up_y['centers'][0, 1]:+.2f}")
+        check("'upstream' puts it at -y, which is the upside-down case",
+              int(np.argmin(down_y['centers'][:, 1])) == 0 and down_y['centers'][0, 1] < 0,
+              f"top at y={down_y['centers'][0, 1]:+.2f}")
+        check('UP_AXIS documents what each convention means',
+              ply_io.UP_AXIS == {'y-up': '+y', 'upstream': '-y'}, str(ply_io.UP_AXIS))
+        check("'upstream' reproduces idol-sdk's save_ply exactly",
+              np.allclose(down_y['centers'], viewer.load_ply(upstream_style)['centers'], atol=1e-6))
+        check('the two conventions differ by a half turn about x',
+              np.allclose(up_y['centers'], np.stack([down_y['centers'][:, 0],
+                                                     -down_y['centers'][:, 1],
+                                                     -down_y['centers'][:, 2]], axis=-1), atol=1e-6))
+        for label, obj in (('y-up', up_y), ('upstream', down_y)):
+            scales = gaussian.scaling.numpy()
+            recovered = np.sort(np.linalg.eigvalsh(obj['covariances']), axis=1)
+            check(f'rotating the object does not change the Gaussian shapes ({label})',
+                  np.allclose(recovered, np.sort(scales ** 2, axis=1), atol=1e-5),
+                  f'max err {np.abs(recovered - np.sort(scales ** 2, axis=1)).max():.2e}')
+        check('both conventions write the standard 17 attributes',
+              up_y['count'] == 4 and down_y['count'] == 4)
+
+        print('\n== up axis: the tools agree with the file')
+        from idol_tools.app import AppState
+
+        check('the web app starts with the up axis its files use',
+              AppState(None, out, 'y-up').up == '+y' and AppState(None, out, 'upstream').up == '-y',
+              f"{AppState(None, out, 'y-up').up} / {AppState(None, out, 'upstream').up}")
+
+        from idol_tools.generate import build_parser
+
+        ns = build_parser().parse_args([EXAMPLE or 'x.png'])
+        check('idol-gen defaults to the right-way-up convention', ns.ply_convention == 'y-up',
+              ns.ply_convention)
+        ns = build_parser().parse_args([EXAMPLE or 'x.png', '--ply_convention', 'upstream'])
+        check('idol-gen can still write upstream-identical files', ns.ply_convention == 'upstream')
+        try:
+            ply_io.save_ply(gaussian, os.path.join(out, 'bad.ply'), 'sideways')
+            check('an unknown convention is refused', False, 'no error raised')
+        except ValueError as error:
+            check('an unknown convention is refused', 'unknown convention' in str(error), str(error))
+
+
 # --------------------------------------------------------------------------- web app section
 
 def test_app():
@@ -453,6 +536,21 @@ def test_app():
         check('steps is bounded to something sane',
               (controls['steps'].props['min'], controls['steps'].props['max']) == (1, 200))
         check('mode matches the CLI', controls['mode'].props['options'] == ['synthetic', 'real'])
+        check('the page can be re-oriented without a reload',
+              controls['up'].props['options'] == ['+y', '-y', '+z', '-z']
+              and controls['up'].value == '+y' and 'flip' in controls,
+              str(controls['up'].props['options']))
+
+        print('\n== web app: re-orienting the view')
+        controls['flip'].fire()
+        check('flip sends the opposite up axis to the viewer',
+              controls['up'].value == '-y' and ('up', '-y') in server.log, str(server.log[-4:]))
+        check('and lays the ground grid in the plane matching that axis',
+              any(entry == ('grid', 'xy') for entry in server.log), str([e for e in server.log if e[0] == 'grid']))
+        controls['up'].fire('+z')
+        check('choosing +z moves the grid to xz',
+              any(entry == ('grid', 'xz') for entry in server.log), str([e for e in server.log if e[0] == 'grid']))
+        controls['up'].fire('+y')
 
         print('\n== web app: levers behave like the CLI')
         controls['preset'].fire('draft')
@@ -731,6 +829,7 @@ def main():
             print(f'  (created a placeholder example at {EXAMPLE})')
         test_cli(example)
         test_viewer()
+        test_ply_convention()
         test_app()
     else:
         import idol.pipeline as pipeline_module
@@ -755,6 +854,7 @@ def main():
         test_pipeline(pipeline, example)
         test_cli(example)
         test_viewer()
+        test_ply_convention()
         test_app()
 
     print('\n' + ('ALL CHECKS PASSED' if not FAILURES else f'{len(FAILURES)} FAILED: {FAILURES}'))
