@@ -10,6 +10,9 @@ Examples
   ./idol-gen render.png --density 32k                 # density alone: 32,768 Gaussians
   ./idol-gen renders/ --out out/ --skip-existing    # a whole folder
   ./idol-gen render.png --variants 3                # seeds 42,43,44 side by side
+  ./idol-gen renders/ --serve --open                # generate, then view in the browser (Ctrl-C to stop)
+
+To look at .ply files you already have, without generating:  ./idol-view outputs/
 
 Quality levers, roughly in order of impact:
   --num_gaussians  density of the splat (32,768 .. 1,048,576, multiple of 32); --density 32k|64k|128k|256k|512k|1m
@@ -25,18 +28,6 @@ import json
 import os
 import sys
 import time
-
-
-def _reexec_into_venv():
-    """Run under the project venv no matter which python started us (deps live there, not in ~/.local)."""
-    venv_python = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               '.venv', 'bin', 'python')
-    if os.path.isfile(venv_python) and os.path.realpath(sys.executable) != os.path.realpath(venv_python):
-        os.environ.setdefault('PYTHONNOUSERSITE', '1')
-        os.execv(venv_python, [venv_python, os.path.abspath(__file__)] + sys.argv[1:])
-
-
-_reexec_into_venv()
 
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff')
 
@@ -74,7 +65,7 @@ def gaussians(value):
     except (ValueError, KeyError):
         raise argparse.ArgumentTypeError(
             f'cannot read {value!r}; use a number like 262144, or a rung like 32k, 256k, 1m '
-            f'({", ".join(DENSITY)})')
+            f'({", ".join(DENSITY)})') from None
     if not MIN_GAUSSIANS <= ivalue <= MAX_GAUSSIANS:
         raise argparse.ArgumentTypeError(
             f'--num_gaussians must be between {MIN_GAUSSIANS:,} (32k) and {MAX_GAUSSIANS:,} (1m), got {ivalue:,}')
@@ -126,6 +117,12 @@ def build_parser():
     parser.add_argument('--weights', default='speridlabs/idol', help='Hugging Face repo or local folder')
     # bookkeeping
     parser.add_argument('--skip-existing', action='store_true', help='skip images whose .ply is already in --out')
+    parser.add_argument('--serve', action='store_true',
+                        help='after generating, serve the .ply files on a local web viewer (viser) and block')
+    parser.add_argument('--port', type=int, default=8080, help='port for --serve (default: 8080)')
+    parser.add_argument('--host', default='127.0.0.1',
+                        help='bind address for --serve; 0.0.0.0 to allow others on your network (default: localhost)')
+    parser.add_argument('--open', action='store_true', help='with --serve, open the browser automatically')
     parser.add_argument('--no-preview', dest='save_preview', action='store_false',
                         help='do not save <name>_input.png (the image the model saw)')
     parser.add_argument('--no-camera', dest='save_camera', action='store_false',
@@ -228,7 +225,6 @@ def main(argv=None):
 
     os.makedirs(args.out, exist_ok=True)
     import torch
-
     from idol.conditioning import EncoderAccessError
     from idol.pipeline import IdolPipeline
 
@@ -243,6 +239,7 @@ def main(argv=None):
     print(f'model loaded in {time.time() - t0:.1f}s on {pipeline.device}\n')
 
     failures = 0
+    written = []
     for path in images:
         name = os.path.splitext(os.path.basename(path))[0]
         for variant in range(args.variants):
@@ -266,6 +263,7 @@ def main(argv=None):
                 failures += 1
                 continue
             output.gaussian.save_ply(ply)
+            written.append(ply)
             if args.save_preview:
                 output.preprocessed_image.save(os.path.join(args.out, f'{name}{suffix}_input.png'))
             if args.save_camera:
@@ -274,8 +272,18 @@ def main(argv=None):
             print(f'{name}{suffix}: {os.path.relpath(ply, args.out)}  '
                   f'({output.gaussian.xyz.shape[0]:,} gaussians, {time.time() - t1:.1f}s)')
     print(f'\n{len(images) * args.variants - failures} saved to {args.out} in {time.time() - t0:.1f}s')
+
+    if args.serve:
+        from idol_tools import viewer
+
+        return viewer.serve([viewer.load_ply(path) for path in written],
+                            host=args.host, port=args.port, up='+y', open_browser=args.open)
     return 1 if failures else 0
 
 
 if __name__ == '__main__':
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from idol_tools._bootstrap import reexec_into_venv
+
+    reexec_into_venv(__file__)
     raise SystemExit(main())

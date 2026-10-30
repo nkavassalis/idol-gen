@@ -1,8 +1,27 @@
+# environments
 .venv/
+venv/
 .uv-cache/
+.uv/
+.python-version
+
+# generated output
 outputs/
 *.ply
+*.glb
+
+# python
 __pycache__/
 *.py[cod]
-nohup.out
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# upstream clone (scripts/setup.sh re-creates it)
 idol-sdk/
+
+# misc
+nohup.out
+.DS_Store

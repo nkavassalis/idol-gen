@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11']
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Cache the Hugging Face and pip caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/AppData/Local/pip/Cache
+            ~/.cache/uv
+          key: ${{ runner.os }}-pip-${{ matrix.python }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: ${{ runner.os }}-pip-${{ matrix.python }}-
+
+      - name: Clone the upstream Idol SDK
+        run: git clone --depth 1 https://github.com/speridlabs/idol-sdk.git idol-sdk
+
+      - name: Install torch from the CPU index (no CUDA needed for these checks)
+        run: python -m pip install --upgrade pip && pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install the SDK and this package
+        run: |
+          pip install -e ./idol-sdk
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Run the checks that need no GPU and no model weights
+        run: python -m idol_tools.smoke_test --cli-only
+
+  launcher:
+    name: launchers and setup script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Shell syntax
+        run: |
+          bash -n scripts/setup.sh
+          for launcher in idol-gen idol-view idol-test; do bash -n "$launcher"; done
+      - name: Help screens render
+        run: |
+          python - <<'PY'
+          import sys; sys.path.insert(0, '.')
+          from idol_tools.generate import build_parser
+          from idol_tools.viewer import build_parser as view_parser
+          for parser in (build_parser(), view_parser()):
+              text = parser.format_help()
+              assert 'usage' in text and len(text) > 200, parser.prog
+              print(f'{parser.prog}: help ok ({len(text.splitlines())} lines)')
+          PY

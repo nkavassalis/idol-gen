@@ -1,27 +1,36 @@
 # idol — project notes
 
-Local wrapper around the upstream `speridlabs/idol` image-to-3D SDK. Read `README.md` first.
+Public CLI + viewer around the upstream `speridlabs/idol` image-to-3D SDK. Read `README.md` first.
 
 ## What lives where
 
-- `idol-sdk/` — **upstream clone, treat as read-only.** Don't patch it to get something working; change
-  `scripts/generate.py` or pin a commit via `SDK_TAG` in `scripts/setup.sh` and file the issue upstream.
-- `scripts/generate.py` — our CLI. All new flags go here, not into the SDK.
-- `scripts/smoke_test.py` — the test. `./idol-test` (add `--eager` for the non-compiled path).
-- `idol-gen`, `idol-test` — thin launchers into `.venv`; they also re-exec from the venv if you run the
-  scripts directly with another python.
+- `idol_tools/generate.py` — the `idol-gen` CLI: presets, `--density`, validation, batch, `--serve`.
+- `idol_tools/viewer.py` — the `idol-view` browser viewer (viser) and the `.ply` → arrays conversion
+  (quaternion → covariance, SH-DC → RGB). `build_scene()` is split from `serve()` so it is testable.
+- `idol_tools/smoke_test.py` — the checks. `./idol-test`, `--eager`, or `--cli-only` (no GPU/weights; CI uses it).
+- `idol-gen`, `idol-view`, `idol-test` — bash launchers into `.venv` (prefer the installed console scripts,
+  fall back to `python -m idol_tools.<mod>`). Windows users take the console scripts / `-m` route.
+- `scripts/setup.sh` — env setup + diagnostics: `--check`, `--rebuild`, `--no-weights`, `--cpu`, `SDK_TAG=`.
+- `idol-sdk/` — **upstream clone, read-only.** Never patch it to get something working; change `idol_tools/`,
+  or pin with `SDK_TAG` and file the issue upstream.
+- `pyproject.toml` — our package (`idol-gen` console scripts, `[view]`/`[dev]` extras); depends on the SDK by
+  git URL, and setup.sh then installs the local clone editable so it wins.
 - `docs/model-card.md` — archived model card (benchmarks, per-GPU timings, official flag table).
+- `.github/workflows/ci.yml` — ubuntu + windows, CPU torch, `ruff check .`, `smoke_test --cli-only`.
 
 ## Non-negotiables for this repo
 
-- **Run the test before calling anything done.** `./idol-test` must pass; it covers the real weights, both
-  sampling paths, PLY validity, determinism, and the CLI's preset/validation/batch logic. If you add a flag,
-  add a check for it.
+- **Run the test before calling anything done.** `./idol-test` must pass (and `--cli-only` for CI). It covers
+  the real weights, both sampling paths, PLY validity, determinism, the quaternion/covariance maths, the
+  `.ply` round trip incl. the z-up→y-up convention, and the CLI's preset/validation/batch logic. New flag →
+  new check.
 - **Keep the gated encoders gated.** The stub in `smoke_test.py` exists so tests run without HF access. Never
   vendor, commit, or mirror DINOv3 / FLUX.2 VAE weights, and never route around `require_encoder_access` —
-  that check is the license boundary, not an obstacle.
+  that check is the licence boundary, not an obstacle.
 - **Keep `.venv` isolated.** No `--system-site-packages`, and the launchers keep `PYTHONNOUSERSITE=1`: this
   machine's `~/.local` has an old `peft` that breaks `diffusers` when it leaks in.
+- **This is a public repo.** No machine-specific paths, hostnames, or "works on my GPU" claims in the README;
+  timings belong in `docs/` with the hardware and settings that produced them.
 - **Don't trust search results about this model.** It is days old; the model card and the SDK source are the
   only reliable references.
 
@@ -37,7 +46,11 @@ knob and also accepts shorthand like `256k`/`0.5m`. The two are mutually exclusi
 
 - First generation in a process pays `torch.compile`; don't measure speed or "hangs" on image #1.
 - `--num_gaussians` must be a multiple of 32 and ≥ 32,768 — the SDK would otherwise silently round down, so
-  the CLI validates and suggests the nearest valid value.
+  the CLI validates and suggests the nearest valid value. `--density` avoids the question entirely.
+- `k`/`m` in density values are 1024/1024² (`256k` = 262,144), matching the model's power-of-two rungs.
+- The SDK's `Gaussian` is z-up; `save_ply` rotates to y-up for viewers. The viser viewer keeps y-up and tells
+  viser the up axis — don't "fix" one side without checking `test_viewer`'s axis check.
 - A bad result is usually framing, not sampling: look at `<name>_input.png` before touching `--steps`.
 - Empty alpha from BiRefNet → `no object found in the image`; the image likely has no single dominant object.
 - OOM is caught and reported with the specific levers to pull rather than a stack trace.
+- `serve()` blocks forever by design; tests must use `build_scene()` with the fake viser, never `serve()`.

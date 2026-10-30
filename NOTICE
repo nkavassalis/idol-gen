@@ -1,0 +1,17 @@
+Idol — image to 3D Gaussian splat
+Copyright (c) the idol-gen project contributors
+
+This product includes software developed at Sperl Labs (https://speridlabs.com):
+  - the Idol model and inference SDK: https://github.com/speridlabs/idol-sdk
+  - the model weights: https://huggingface.co/speridlabs/idol
+Both are licensed under the Apache License, Version 2.0.
+
+This repository is a command line wrapper and viewer around that SDK. It is not affiliated with
+Sperl Labs. If you use it in research, please cite the Idol project page:
+https://speridlabs.com/research/idol
+
+Note on the image encoders: Idol reads its input through Meta's DINOv3
+(facebook/dinov3-vith16plus-pretrain-lvd1689m) and Black Forest Labs' FLUX.2 VAE
+(black-forest-labs/FLUX.2-dev). Those weights are gated on Hugging Face and are governed by their own
+licenses and acceptance terms, which each user must accept. This repository does not contain, mirror, or
+redistribute them.
